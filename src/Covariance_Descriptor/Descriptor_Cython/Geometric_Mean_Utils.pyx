@@ -2,20 +2,16 @@ import cython
 import numpy as np
 cimport numpy as cnp
 import time
-from scipy.spatial.distance import euclidean
-from scipy.sparse import csr_matrix
 from cython.parallel cimport prange
 from libc.stdlib cimport malloc, free
-from libc.math cimport signbit,exp, pi,pow, fmax,fmin,sqrt,abs
+from libc.math cimport exp, pi,pow,sqrt,abs
 cimport scipy.linalg.cython_lapack as lapack
 from scipy.linalg.cython_lapack cimport dpotrf as cholesky_c
-from scipy.linalg.cython_lapack cimport dpotri as inv_cholesky_c
 from scipy.linalg.cython_lapack cimport dtrtri as Upper_inv
 from scipy.linalg.cython_lapack cimport dhseqr as schur_c
-from scipy.linalg.cython_lapack cimport sgehrd as hessenberg_c
 from scipy.linalg.cython_lapack cimport dgehrd as hessenberg_c_1 
 from scipy.linalg.cython_lapack cimport dorghr as Q_transform # Get the Q Transform from vector Q
-from scipy.linalg.cython_lapack cimport zpotrf, zpotri
+from scipy.linalg.cython_lapack cimport zpotrf,dsyev
 
 'Import C-Functions'
 
@@ -53,6 +49,10 @@ cdef inline double logdet(TYPE* X, int s, int* info) nogil:
             out += 2.0 * log(creal(X[i*(s+1)]))
     return out
 
+""" References \
+ [1] D.A. Bini and B. Iannazzo, "Computing the Karcher mean of symmetric \
+ positive definite matrices", Linear Algebra Appl., 438-4 (2013), """
+
 @cython.boundscheck(True)
 @cython.wraparound(True)
 @cython.cdivision(True)
@@ -68,7 +68,6 @@ def Bini_Riemann(cnp.ndarray[double,ndim = 3,negative_indices = True] Matrix_Arr
     cdef int nuold = 100000
     
     cdef cnp.ndarray[double, ndim = 2,negative_indices = False] Mean = np.zeros((d,d))
-    #cdef cnp.ndarray[double, ndim = 2,negative_indices = False] Mean = Init.copy()
     cdef int k,info,j,i,l,it
     cdef double theta, beta, ch, gamma ,dh
     
@@ -131,10 +130,7 @@ def Bini_Riemann(cnp.ndarray[double,ndim = 3,negative_indices = True] Matrix_Arr
             V,U      = Schur_Cython(Z.T@Z) # Pass Z.T T as U_d[k] to ietration for better Performance
             U_d[k]   = U
             V_d[k]   = np.diag(V)
-            
-            #for i in prange(d, nogil = True):
-            #    V_d[k,i] = V[i,i]
-                
+        
         ' Routine for adaptive step size selection as preconditing with largest and smalles eigenvalue '
         
         if Aut == True:
@@ -161,17 +157,16 @@ def Bini_Riemann(cnp.ndarray[double,ndim = 3,negative_indices = True] Matrix_Arr
         Mean  = Z.T@Z
         
         'Compute norm of S'
-        
-        #nu    = np.max(np.abs(np.diag(Vs)))
+    
         nu = np.sqrt(np.mean(np.abs(Mean) ** 2))
         if nu < tol or nu > nuold:
-            #print('\n Required {:*^10} Iterations'.format(it))
+ 
             t_end = time.time()-starttime
             print('Requered Iterations -------{:*^10}------- seconds'.format(t_end))
             break
         nuold = nu
             
-    return Mean
+    return Mean,,t_end
 
 
 def Riemann_Update_Cluster(w, Data, Clusters):
@@ -274,7 +269,7 @@ from scipy.linalg.cython_lapack cimport dsygst as Standard_Form
 
 
 ' Computes the Riemannian Distance through generalized eigenvalue dec '
-from cython.view cimport array as cvarray
+
 @cython.boundscheck(False)
 @cython.wraparound(False)
 
@@ -382,8 +377,6 @@ def Return_Cholesky(cnp.ndarray[double,ndim = 2,negative_indices = False] A):
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-    
-    
 
 def Schur_Cython(cnp.ndarray[double,ndim = 2,negative_indices = False] A):
     
@@ -442,6 +435,38 @@ def Schur_Cython(cnp.ndarray[double,ndim = 2,negative_indices = False] A):
     schur_c('S','V',&d,&ILO,&IHI,&work[0,0],&d,&WR[0],&WI[0],&Q[0,0],&d,&Work[0],&lwork,&info)
     
     return work.T,Q.T
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+
+def expmh(double[:,:] M, double[:,:] out):
+    ### Matrix exponential of a symmetric matrix ###
+    cdef int n = M.shape[0], lwork = 3*M.shape[0]-1, info, i, j, k
+    cdef double* V = <double*> malloc(sizeof(double) * n * n)
+    cdef double* w = <double*> malloc(sizeof(double) * n)
+    cdef double* work = <double*> malloc(sizeof(double) * lwork)
+    # Copy upper triangular part of M:
+    for i in range(n):
+        for j in range(i,n):
+            V[n*i+j] = M[i,j]
+    # Eigenvalue decomposition:
+    dsyev('V', 'L', &n, V, &n, w, work, &lwork, &info)
+    assert info == 0
+    # Exp(M) using eigenvalue decomposition:
+    for i in range(n):
+        for j in range(i,n):
+            out[i,j] = 0.0
+            for k in range(n):
+                out[i,j] += exp(w[k]) * V[n*k+i] * V[n*k+j]
+    # Symmetrize result:
+    for j in range(n):
+        for i in range(j+1,n):
+            out[i,j] = out[j,i]
+    # Free allocated memory:
+    free(V)
+    free(w)
+    free(work)
+    return np.asarray(out)
 
 @cython.boundscheck(False)
 @cython.wraparound(False)

@@ -1,6 +1,7 @@
-from Cython import cython_distance as cdistance
-from Geometric_Kmeans import  inv_hpd 
 import scipy.linalg as LA
+from scipy.linalg import expm,logm
+import time
+import numpy as np
 
 def geometric_mean(M, th_JAD=1e-6, th=1e-10):
     """Computation of the geometric mean of SPD matrices using the Joint Approximate Diagonalization.
@@ -118,102 +119,6 @@ def eigh2(A,B):
         V[:,1] /= np.sqrt(V[:,1].dot(B.dot(V[:,1])))
     return V
     
-def divergence_stein(X,Y):
-    """Subroutine for computing the Stein divergence of two SPD matrices X and Y."""
-    return np.log(LA.det(0.5*(X+Y)))-0.5*np.log(LA.det(X.dot(Y)))
-    
-def Stein_Mean(Matrix_Array,Max_Iter = 5000,tol=1e-10):
-    assert Matrix_Array.shape[1] == Matrix_Array.shape[2]
-    N,d = Matrix_Array.shape[0:2]
-    
-    'Initialization'
-    
-    Mean = np.zeros((d,d))
-    Mean += np.sum(Matrix_Array,axis = 0 )/N 
-    Mean = Cheap_Mean(Matrix_Array)
-    tau = 1
-    starttime = time.time()
-    for k in range(Max_Iter):
-        #tau = 1/(k+1)
-        'Compute Gradient'
-        Grad = np.zeros((d,d))
-        R = np.zeros((d,d))
-        for s in range(N):
-            R += np.linalg.inv((Mean+Matrix_Array[s])/2)/N
-        Mean_old = Mean.copy()
-        #Mean     = Mean_old-tau* (1/2)*(Mean_old@R@Mean_old-Mean_old)
-        Mean     = np.linalg.inv(R)
-        if np.linalg.norm((Mean - Mean_old))/np.linalg.norm(Mean_old) < tol:
-            print('\n Required {:*^10} Iterations'.format(k))
-            break
-    t_end = time.time()-starttime
-    print('\n')
-    print('Requered Iterations -------{:*^10}------- seconds'.format(t_end))
-    return Mean,k,t_end
-    
-def Stein_Mean_Geom(Matrix_Array,Max_Iter = 5000,tol=1e-10):
-    assert Matrix_Array.shape[1] == Matrix_Array.shape[2]
-    N,d = Matrix_Array.shape[0:2]
-    
-    'Initialization'
-    
-    Mean = np.zeros((d,d))
-    Mean += np.sum(Matrix_Array,axis = 0 )/N 
-    #Mean = Cheap_Mean(Matrix_Array)
-    tau = 1
-    starttime = time.time()
-    for k in range(Max_Iter):
-        #tau = 1/(k+1)
-        'Compute Gradient'
-        Grad = np.zeros((d,d))
-        R = np.zeros((d,d))
-        for s in range(N):
-            R += np.linalg.inv((Mean+Matrix_Array[s])/2)/N
-        Mean_old = Mean.copy()
-        #Mean     = Mean_old@expm((-tau* (1/2)*(Mean_old@R@Mean_old-Mean_old)))
-        Mean     = Mean_old-tau* (1/2)*(Mean_old@R@Mean_old-Mean_old)
-        if np.linalg.norm((Mean - Mean_old))/np.linalg.norm(Mean_old) < tol:
-            print('\n Required {:*^10} Iterations'.format(k))
-            break
-    t_end = time.time()-starttime
-    print('\n')
-    print('Requered Iterations -------{:*^10}------- seconds'.format(t_end))
-    return Mean,k,t_end
-    
-def Log_Euclid_Distance(Matrix_Array,Prototypes):
-    
-    ' Tranform Matrix Array to upper triangular part of vector arrays\
-       by rescaling with factor 1/sqrt(2) see Arsigny'
-    
-    x,y,z,s = Matrix_Array.shape[0:4]
-    
-    ' Rescaling Matrix '
-    
-    A = matrix_sym2vec(s)
-    
-    
-    ' Rescaled Vector Array '
-    
-    Prototypes_Vec   =  np.zeros((Prototypes.shape[0],Prototypes.shape[1],int((s+1)*s/2)))
-    
-    print(Prototypes_Vec.shape)
-    
-    for k in range(Prototypes.shape[0]):
-        print(Prototypes_Vec.shape)
-        Prototypes_Vec[k,:,:] = linalgh.logmh(Prototypes.astype(np.double)[k,:,:,:]).reshape(Prototypes.shape[1],s*s).dot(A.T)
-    
-    Matrix_Array_Vec = linalgh.logmh(f_pd.astype(np.double).reshape((x*y*z,s,s))).reshape(x*y*z,s*s).dot(A.T)
-    
-    'Inititlize Distance Matrix'
-    
-    Distance = np.zeros((x*y*z,Prototypes.shape[0],Prototypes.shape[1]))
-    
-    for k in range(Prototypes.shape[1]):
-        Distance[:,:,k] = cdist(Matrix_Array_Vec,Prototypes_Vec[:,k,:])
-    return Distance.reshape(x,y,z,Prototypes.shape[0],Prototypes.shape[1])
-    
-            
-    
- 
+
     
 

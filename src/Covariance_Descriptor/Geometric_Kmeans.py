@@ -1,12 +1,9 @@
 
 from sklearn.cluster import k_means as kmeans
-from Cython.cython_tools import distancematrix_stein as dis_stein
-import linalgh
-from tools import matrix_sym2vec
-from Cython import cython_distance as cdistance
+import Descriptor_Cython
 import numpy as np
 import time
-from Cython.Geometric_Mean_Utils import Bini_Riemann,Riemann_Update_Cluster,distance_Riemmann,sqrtm,logm
+from scipy.linalg import sqrtm,logm,expm
 
 
 def K_means(f_pd,K,Max_Iter = 100,n_init_kmeans=10,Method = 'Log_Euclid',Metric = 'Riemmann'):
@@ -25,20 +22,20 @@ def K_means(f_pd,K,Max_Iter = 100,n_init_kmeans=10,Method = 'Log_Euclid',Metric 
         # Transfer the Frobenius inner product to Euclidian
         A = matrix_sym2vec(s)
         # Matrix_Log,such that |X|_2 = |log f_pd|_F, == vec(log_f_pd)
-        X = linalgh.logmh(f_pd).reshape((N_Pixel,s*s)).dot(A.T)
+        X = Descriptor_Cython.Geometric_Mean_Utils.logmh(f_pd).reshape((N_Pixel,s*s)).dot(A.T)
         # K_means on Eucliadian space == Tangential space log f_pd
         X = kmeans(X, K, n_init=n_init_kmeans)[0]
         # Transform to Manifold by exp such that G = exp(log X_1),...exp(log_X_K)
-        A = A.T.dot(linalgh.invh(A.dot(A.T)))
-        Clusters = linalgh.expmh(np.einsum('kl,jl->jk', A, X).reshape((K,s,s))) 
+        A = A.T.dot(Descriptor_Cython.Geometric_Mean_Utils.invh(A.dot(A.T)))
+        Clusters = Descriptor_Cython.Geometric_Mean_Utils.expmh(np.einsum('kl,jl->jk', A, X).reshape((K,s,s))) 
         if Metric == 'Log_Det':
             for it in range(Max_Iter):
-                D = dis_stein(f_pd, Clusters)
+                D = Descriptor_Cython.cython_distance.distance_stein(f_pd, Clusters)
                 W[range(N_Pixel),np.argmin(D, axis=-1)] = 1.0 # assignment by NN
                 if np.allclose(W_old, W):
                     break
                 for j in range(Max_Iter):
-                    mcG = cdistance.riccatiG(W/np.sum(W, axis=0), f_pd, Clusters)
+                    mcG = Descriptor_Cython.cython_distance.riccatiG(W/np.sum(W, axis=0), f_pd, Clusters)
                     grad = Clusters[0] - Clusters[0].dot(mcG[0]).dot(Clusters[0])
                     grad = np.sqrt(np.mean(np.abs(grad) ** 2))
                     Clusters = inv_hpd(mcG)
@@ -47,11 +44,11 @@ def K_means(f_pd,K,Max_Iter = 100,n_init_kmeans=10,Method = 'Log_Euclid',Metric 
                 W_old = W
         elif Metric == 'Riemmann':
             for it in range(Max_Iter):
-                D = distance_Riemmann(f_pd, Clusters)
+                D = Descriptor_Cython.Geometric_Mean_Utils.distance_Riemmann(f_pd, Clusters)
                 W[range(N_Pixel),np.argmin(D, axis=-1)] = 1.0 # assignment by NN
                 if np.allclose(W_old, W):
                     break
-                Clusters = Riemann_Update_Cluster(W/np.sum(W, axis=0), f_pd, Clusters)
+                Clusters = Descriptor_Cython.Geometric_Mean_Utils.Riemann_Update_Cluster(W/np.sum(W, axis=0), f_pd, Clusters)
                 W_old = W
     return Clusters.reshape(-1,s*s)
 
@@ -93,24 +90,30 @@ def matrix_sym2vec(s):
         ind += s-i
     return res
 
-'Riemannian Mean Computation based on a gradient descent applied on equation (1)'
+'Riemannian Mean Computation based on a gradient descent applied on equation (1) (Refer to Notebook)'
 
-def Logm_vec(Matrix_Array):
-    return np.array(list(map(logm,Matrix_Array)))
 
 def Riemannian_Distance(A,B):
     return np.linalg.norm(logm(sqrtm(np.linalg.inv(A))@B@sqrtm(np.linalg.inv(A))),ord= 'fro')
 
-def Gradient_Descent_Mean(Matrix_Array,prec = 20,Max_Iter = 1000):
+' Vectorized matrix logarithm '
+
+def Logm_vec(Matrix_Array):
+    return np.array(list(map(logm,Matrix_Array)))
+
+' Riemannian Mean Approximation via gradient descent with adaptive step size '
+
+def Gradient_Descent_Mean(Matrix_Array,prec = 1e-3,Max_Iter = 100):
     'Intialization'
     tau = 1
-    X_0 = Matrix_Array[0]
+    N = Matrix_Array.shape[0]
     starttime = time.time()
-    X_1 = X_0@expm(-tau*np.sum(Logm_vec(np.dot(np.linalg.inv(Matrix_Array),X_0)),axis = 0))
+    X_0 = Matrix_Array[0]
+    X_1 = X_0@expm(-tau*np.sum(Logm_vec(np.dot(np.linalg.inv(Matrix_Array),X_0)),axis = 0)/N)
     k = 0
-    while np.linalg.norm(X_1-X_0)/np.linalg.norm(X_0) > prec or k < Max_Iter:
+    while Riemannian_Distance(X_1,X_0) > prec or k >= Max_Iter:
         X_0 = X_1.copy()
-        X_1 = sqrtm(X_0)@expm(-tau*np.sum(Logm_vec(sqrtm(X_0)@np.dot(np.linalg.inv(Matrix_Array),sqrtm(X_0))),axis = 0))@sqrtm(X_0)
+        X_1 = sqrtm(X_0)@expm(-tau*np.sum(Logm_vec(sqrtm(X_0)@np.dot(np.linalg.inv(Matrix_Array),sqrtm(X_0))),axis = 0)/N)@sqrtm(X_0)
         k += 1
         tau = 1/(k+1)
     t_end = time.time()-starttime
@@ -157,5 +160,82 @@ def Return_Descriptors(f_cov,layer_mask,Scan,save = True,Layers = 14):
     if save == True:
         np.save('Layer_Descriptors_Stein_new_P5_13',Layer_Descriptors) 
     return Layer_Descriptors
+
+from scipy.linalg import schur
+
+
+def SPD_Mean_Quadratic_1(Matrix_Array,Max_Iter = 120,tol=1e-4,Aut = True):
+    assert Matrix_Array.shape[1] == Matrix_Array.shape[2]
+    N,d = Matrix_Array.shape[0:2]
+    
+    'Initilizre Cholesky Decomposition'
+    
+    
+    'Store Matrix L and its Inverse'
+    
+        
+    List_Cholesky = np.zeros_like(Matrix_Array)  
+    nuold = 100000
+    
+    'Initilize with arithmetic mean'
+    
+    Mean = np.zeros((d,d))
+    for k in range(N):
+        List_Cholesky[k] = cholesky(Matrix_Array[k])
+    #    Mean             += Matrix_Array[k]/N 
+    Mean = np.mean(Matrix_Array,axis = 0)
+    print(List_Cholesky)
+        #A1 = np.zeros_like(A.copy())
+    #Mean = Cheap_Mean(Matrix_Array)
+    starttime = time.time()
+    for It in range(Max_Iter):
+        
+        R0  = cholesky(Mean)
+        iR0 = np.linalg.inv(R0)
+        
+        'Initilize LIst for Cholesky '
+        
+        U_d = np.zeros_like(Matrix_Array)
+        V_d = np.zeros((N,d))
+        
+        for k in range(N):
+            
+            Z        = List_Cholesky[k]@iR0
+            V,U      = schur(Z.T@Z)
+            U_d[k]     = U
+            V_d[k]   = np.diag(V)
+        
+        if Aut == True:
+            beta  = 0
+            gamma = 0
+            for s in range(N):
+                ch = np.max(V_d[s])/np.min(V_d[s])
+                if np.abs(ch-1) < 0.5:
+                    dh = np.log1p(ch-1)/(ch-1)
+                else:
+                    dh = np.log(ch)/(ch-1)
+                beta  += dh
+                gamma += ch*dh
+            theta = 2/(gamma + beta)
+        S = np.zeros((d,d))
+        for k in range(N):
+            T = U_d[k]@np.diag(np.log(V_d[k]))@U_d[k].T
+            S += (T+(T.T))/2
+        Vs,Us = schur(S)
+        Z     = np.diag(np.exp(np.diag(Vs*theta/2)))@(Us.T)@R0
+        Mean  = Z.T@Z
+        
+        'Compute norm of S'
+        
+        nu    = np.max(np.abs(np.diag(Vs)))
+        print(nu)
+        
+        if nu < np.linalg.norm(Mean)*tol or nu > nuold:
+            print('\n Required {:*^10} Iterations'.format(It))
+            break
+        nuold = nu
+    t_end = time.time()-starttime
+    print('Requered Iterations -------{:*^10}------- seconds'.format(t_end))
+    return Mean,It,t_end
 
 

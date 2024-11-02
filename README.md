@@ -3,27 +3,24 @@ Library for extracting local features, prototypes on Curved Manifold of Symmetri
 
 ## Partitioning of color images via different metrics (postively, negatily and flat) curved manifolds. 
 Supports Riemannian means including 
-   - Log-Euclidian Means using Euclidian Metrics proposed in paper: 
+   - Log-Euclidian Means using Euclidian Metrics proposed: 
    - (Cheap Mean)
    - (Bini Mean)
+   - Approximate Joint Diagonalization (JAD)
    - Riamannian Mean
    Comparison of key properties satisfied by the mean with respect to implemented metrics:
 
    ![titleimageA](/docs/Mean_Prop.png)
    
-   Left: natural image; Right: partitioning using the piecewise affine-linear Mumford-Shah model
-   
-   - Avoids oversegmentation of images with linear trends (e.g. the sky in a landscape image, illumination gradients)
-   
+   Left: A random test image whcih is not a member of the training set; Right: Riemannian distance and Stein Divergence with $400$ extracted covariance desriptors from the training set consisiting of 10 images. 
+ 
    ![PottsAndPALMS](/docs/Vis_Deep.png)
    ![PottsAndPALMS](/docs/Deep_Cov_Vis.png)
    
-   Left: natural image; Center: classical (piecewise constant) Potts model; Right: piecewise affine-linear Mumford-Shah model
+   Left: Running Times of different algorithms; Center: Log Euclidian Mean; Right: piecewise affine-linear Mumford-Shah model
    
    - Scale of the partitioning is controlled by a model parameter
-   
-   ![parameter](/docs/parameter.png)
-   
+
   # Detailed Breakdown of the Code for Computing Covariance Descriptors for Image Data
 
 The code is designed to compute covariance descriptors for image data using a variety of predefined filters. Here's a detailed breakdown of key sections and functionalities of this code:
@@ -108,29 +105,26 @@ f_vec, cov_matrices = features.covariance_descriptor_3D(
 
 ## Installation
 ### Compiling
-The algorithm depends on a mex script that needs to be compiled before execution. For compilation inside MATLAB, cd into the 'src/cpp' folder and run build.m
+The library depends on accelerated helper function for mean computation in cython that needs to be compiled before execution. For compilation, cd into the 'src/Covariance_Descritor/' folder and run make all
 
-Requires the Armadillo and OpenMP library
+Requires the OpenMP library
 
-Tested with Armadillo 8.400 https://launchpad.net/ubuntu/+source/armadillo/1:8.400.0+dfsg-2 and OpenMP 4.0.
 On Linux, just use your package manager to install it:
-
-sudo apt-get install libarmadillo-dev
 
 sudo apt-get install libomp-dev
 
 ### Running
-For a test run on the test image "redMacaw", run demo.m. 
-demo.m calls the main function, affineLinearPartitioning.m
+For a test run on the horse data set, (todo add path). 
+To compuate the covariance descriptors, call the function (todo add function) with the arguments
 Arguments of affineLinearPartitioning.m are:
  - f: input image (double)
  - gamma: boundary penalty (larger choice -> less segments)
  - varargin: optional input parameters
 
 ## References
-- L. Kiefer, M. Storath, A. Weinmann.
-    "An efficient algorithm for the piecewise affine-linear Mumford-Shah model based on a Taylor jet splitting."
-    IEEE Transactions on Image Processing, 2020.
-- L. Kiefer, M. Storath, A. Weinmann.
-    "PALMS image partitioning – a new parallel algorithm for the piecewise affine-linear Mumford-Shah model."
-     Image Processing On Line, 2020.
+- Dario A. Bini, Bruno Iannazzo,
+    "A note on computing matrix geometric means. Adv Comput Math."
+    Adv Comput Math 35, 175–192 (2011). https://doi.org/10.1007/s10444-010-9165-0
+- Dario A. Bini, Bruno Iannazzo,
+    "Computing the Karcher mean of symmetric positive definite matrices."
+    Linear Algebra and its Applications,Volume 438, Issue 4,2013

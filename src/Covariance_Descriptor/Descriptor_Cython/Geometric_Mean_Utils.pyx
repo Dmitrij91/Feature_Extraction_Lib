@@ -15,6 +15,9 @@ from scipy.linalg.cython_lapack cimport zpotrf,dsyev
 
 'Import C-Functions'
 
+cdef extern from 'complex.h' nogil:
+    complex conj(complex)
+
 cdef extern from "math.h":
     double sqrt(double x) nogil
     double log(double x) nogil
@@ -166,7 +169,7 @@ def Bini_Riemann(cnp.ndarray[double,ndim = 3,negative_indices = True] Matrix_Arr
             break
         nuold = nu
             
-    return Mean,,t_end
+    return Mean,it,t_end
 
 
 def Riemann_Update_Cluster(w, Data, Clusters):
@@ -190,7 +193,7 @@ def Riemann_Update_Cluster(w, Data, Clusters):
         Mask = Data[w[:,j] == 1]
         print(Mask.shape)
         if Mask.shape[0] !=0:
-            out[j,:,:] = Bini_Riemann(Mask)
+            out[j,:,:],_,_ = Bini_Riemann(Mask)
               
 
     return np.asarray(out)
@@ -549,3 +552,168 @@ def invh(cnp.ndarray[double, ndim=2, negative_indices=False] M):
         for i in range(j+1,n):
             inv_M[i,j] = inv_M[j,i]
     return inv_M
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def logmh_seq(double[:,:,:] M, double[:,:,:] out):
+    ### Matrix logarithm for a sequence of SPD matrices ###
+    cdef int N = M.shape[0], n = M.shape[1]
+    cdef int info, lwork = 3*n-1
+    cdef double* V
+    cdef double* w
+    cdef double* work
+    cdef int i, j, k, l
+    with nogil:
+        for l in prange(N):
+            V = <double*> malloc(sizeof(double) * n * n)
+            w = <double*> malloc(sizeof(double) * n)
+            work = <double*> malloc(sizeof(double) * lwork)
+            # Copy upper triangular part of M:
+            for i in range(n):
+                for j in range(i,n):
+                    V[n*i+j] = M[l,i,j]
+            # Eigenvalue decomposition:
+            dsyev('V', 'L', &n, V, &n, w, work, &lwork, &info)
+            # Log(M) using eigenvalue decomposition:
+            for i in range(n):
+                for j in range(i,n):
+                    out[l,i,j] = 0.0
+                    for k in range(n):
+                        out[l,i,j] += log(w[k]) * V[n*k+i] * V[n*k+j]
+            # Symmetrize result:
+            for j in range(n):
+                for i in range(j+1,n):
+                    out[l,i,j] = out[l,j,i]
+            # Free allocated memory:
+            free(V)
+            free(w)
+            free(work)
+    return np.asarray(out)
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def invh_seq(double[:,:,:] M, double[:,:,:] out):
+    ### Matrix inverse for a sequence of SPD matrices ###
+    cdef int N = M.shape[0], n = M.shape[1], info, i, j, k
+    for k in prange(N, nogil=True):
+        # Copy upper triangular part of M:
+        for i in range(n):
+            for j in range(i,n):
+                out[k,i,j] = M[k,i,j]
+        # Cholesky decomposition:
+        cholesky_c('L', &n, &out[k,0,0], &n, &info)
+        # Matrix inverse using Cholesky decomposition:
+        lapack.dpotri('L', &n, &out[k,0,0], &n, &info)
+        # Symmetrize result:
+        for j in range(n):
+            for i in range(j+1,n):
+                out[k,i,j] = out[k,j,i]
+    return np.asarray(out)
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def expmh_seq(double[:,:,:] M, double[:,:,:] out):
+    ### Matrix exponential for a sequence of symmetric matrices ###
+    cdef int N = M.shape[0], n = M.shape[1]
+    cdef int info, lwork = 3*n-1
+    cdef double* V
+    cdef double* w
+    cdef double* work
+    cdef int i, j, k, l
+    with nogil:
+        for l in prange(N):
+            V = <double*> malloc(sizeof(double) * n * n)
+            w = <double*> malloc(sizeof(double) * n)
+            work = <double*> malloc(sizeof(double) * lwork)
+            # Copy upper triangular part of M:
+            for i in range(n):
+                for j in range(i,n):
+                    V[n*i+j] = M[l,i,j]
+            # Eigenvalue decomposition:
+            dsyev('V', 'L', &n, V, &n, w, work, &lwork, &info)
+            # Exp(M) using eigenvalue decomposition:
+            for i in range(n):
+                for j in range(i,n):
+                    out[l,i,j] = 0.0
+                    for k in range(n):
+                        out[l,i,j] += exp(w[k]) * V[n*k+i] * V[n*k+j]
+            # Symmetrize result:
+            for j in range(n):
+                for i in range(j+1,n):
+                    out[l,i,j] = out[l,j,i]
+            # Free allocated memory:
+            free(V)
+            free(w)
+            free(work)
+    return np.asarray(out)
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def inv_hpd(TYPE[:,:,:] M, TYPE[:,:,::1] out = None):
+    """Computes the matrix inverse for a sequence of HPD matrices."""
+
+    assert M.shape[1] == M.shape[2]
+    cdef int N = M.shape[0], n = M.shape[1], info, i, j, k
+    if out is None:
+        if TYPE is double:
+            out = np.empty(M.shape, dtype=np.float64, order='C')
+        elif TYPE is complex:
+            out = np.empty(M.shape, dtype=np.complex128, order='C')
+    
+    for k in prange(N, nogil=True):
+        # Copy upper triangular part of M:
+        for i in range(n):
+            for j in range(i,n):
+                out[k,i,j] = M[k,i,j]
+        if TYPE is double:
+            # Cholesky decomposition:
+            lapack.dpotrf('L', &n, &out[k,0,0], &n, &info)
+            # Matrix inverse using Cholesky decomposition:
+            lapack.dpotri('L', &n, &out[k,0,0], &n, &info)
+            # Symmetrize result:
+            for j in range(n):
+                for i in range(j+1,n):
+                    out[k,i,j] = out[k,j,i]
+        elif TYPE is complex:
+            # Cholesky decomposition:
+            lapack.zpotrf('L', &n, &out[k,0,0], &n, &info)
+            # Matrix inverse using Cholesky decomposition:
+            lapack.zpotri('L', &n, &out[k,0,0], &n, &info)
+            # Symmetrize result:
+            for j in range(n):
+                for i in range(j+1,n):
+                    out[k,i,j] = conj(out[k,j,i])
+    return np.asarray(out)
+
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def inv_3x3(TYPE[:,:,:] M, TYPE[:,:,:] out = None):
+    """Computes the matrix inverse for a sequence of 3x3 matrices."""
+    
+    assert M.shape[1] == M.shape[2] == 3
+    cdef int n = M.shape[0], j
+    cdef TYPE det
+    
+    if out is None:
+        if TYPE is double:
+            out = np.empty(M.shape, dtype=np.float64, order='C')
+        elif TYPE is complex:
+            out = np.empty(M.shape, dtype=np.complex128, order='C')
+    
+    for j in prange(n, nogil=True):
+        det = M[j,0,0]*M[j,1,1]*M[j,2,2] + M[j,0,1]*M[j,1,2]*M[j,2,0] \
+            + M[j,0,2]*M[j,1,0]*M[j,2,1] - M[j,2,0]*M[j,1,1]*M[j,0,2] \
+            - M[j,1,0]*M[j,0,1]*M[j,2,2] - M[j,0,0]*M[j,2,1]*M[j,1,2]
+        out[j,0,0] = (M[j,1,1]*M[j,2,2] - M[j,1,2]*M[j,2,1]) / det
+        out[j,0,1] = (M[j,0,2]*M[j,2,1] - M[j,0,1]*M[j,2,2]) / det
+        out[j,0,2] = (M[j,0,1]*M[j,1,2] - M[j,0,2]*M[j,1,1]) / det
+        out[j,1,0] = (M[j,1,2]*M[j,2,0] - M[j,1,0]*M[j,2,2]) / det
+        out[j,1,1] = (M[j,0,0]*M[j,2,2] - M[j,0,2]*M[j,2,0]) / det
+        out[j,1,2] = (M[j,0,2]*M[j,1,0] - M[j,0,0]*M[j,1,2]) / det
+        out[j,2,0] = (M[j,1,0]*M[j,2,1] - M[j,1,1]*M[j,2,0]) / det
+        out[j,2,1] = (M[j,0,1]*M[j,2,0] - M[j,0,0]*M[j,2,1]) / det
+        out[j,2,2] = (M[j,0,0]*M[j,1,1] - M[j,0,1]*M[j,1,0]) / det
+    return np.asarray(out)

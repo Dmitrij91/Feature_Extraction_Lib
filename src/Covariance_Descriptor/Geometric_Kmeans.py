@@ -1,6 +1,9 @@
 
 from sklearn.cluster import k_means as kmeans
 import Descriptor_Cython
+import Descriptor_Cython.cython_distance
+import Descriptor_Cython.Geometric_Mean_Utils
+import linalgh
 import numpy as np
 import time
 from scipy.linalg import sqrtm,logm,expm
@@ -17,17 +20,21 @@ def K_means(f_pd,K,Max_Iter = 100,n_init_kmeans=10,Method = 'Log_Euclid',Metric 
     W_old = np.zeros((N_Pixel,K))
     tol_mean = 1e-4
     if Method == 'Log_Euclid': 
-        # Cumpute Clusters 
-        # Initialize G by log-Euclidean kmeans:
-        # Transfer the Frobenius inner product to Euclidian
+        
+        '''Cumpute Clusters 
+        Initialize G by log-Euclidean kmeans:
+        Transfer the Frobenius inner product to Euclidian'''
+        
         A = matrix_sym2vec(s)
-        # Matrix_Log,such that |X|_2 = |log f_pd|_F, == vec(log_f_pd)
-        X = Descriptor_Cython.Geometric_Mean_Utils.logmh(f_pd).reshape((N_Pixel,s*s)).dot(A.T)
+        
+        '''Matrix_Log,such that |X|_2 = |log f_pd|_F, == vec(log_f_pd)'''
+        
+        X = linalgh.logmh(f_pd).reshape((N_Pixel,s*s)).dot(A.T)
         # K_means on Eucliadian space == Tangential space log f_pd
         X = kmeans(X, K, n_init=n_init_kmeans)[0]
         # Transform to Manifold by exp such that G = exp(log X_1),...exp(log_X_K)
-        A = A.T.dot(Descriptor_Cython.Geometric_Mean_Utils.invh(A.dot(A.T)))
-        Clusters = Descriptor_Cython.Geometric_Mean_Utils.expmh(np.einsum('kl,jl->jk', A, X).reshape((K,s,s))) 
+        A = A.T.dot(linalgh.invh(A.dot(A.T)))
+        Clusters = linalgh.expmh(np.einsum('kl,jl->jk', A, X).reshape((K,s,s))) 
         if Metric == 'Log_Det':
             for it in range(Max_Iter):
                 D = Descriptor_Cython.cython_distance.distance_stein(f_pd, Clusters)
@@ -48,11 +55,92 @@ def K_means(f_pd,K,Max_Iter = 100,n_init_kmeans=10,Method = 'Log_Euclid',Metric 
                 W[range(N_Pixel),np.argmin(D, axis=-1)] = 1.0 # assignment by NN
                 if np.allclose(W_old, W):
                     break
-                Clusters = Descriptor_Cython.Geometric_Mean_Utils.Riemann_Update_Cluster(W/np.sum(W, axis=0), f_pd, Clusters)
+                Clusters = Descriptor_Cython.Geometric_Mean_Utils.Riemann_Update_Cluster(W, f_pd, Clusters)
                 W_old = W
     return Clusters.reshape(-1,s*s)
 
+def greedy_clustering(X, K, metric = 'Stein', init = None, out_dist = False):
+    """
+    Computes a metric clustering by using a greedy picking of cluster centers.
+    
+    Parameters
+    ----------
+    X : array
+        An array containing the N data points. If metric == 'Stein, then X 
+        should be an (N,s,s) array. If metric == 'Euclidean', then X should 
+        be an (N,s) array.
+    K : int
+        Number of clusters.
+    metric : str or callable
+        Distance function. It is either a callable function or a string for a 
+        predefined metric ('Stein' or 'Euclidean')
+    init : array or None
+        Initialization point for the greedy clustering (first cluster center).
+        If init is None, clustering is initialized by choosing the nearest 
+        point of the average.
+    out_dist : bool
+        If out_dist == True, the distances dist (see below).
+    
+    Returns
+    -------
+    Y : array
+        An array containing the K cluster centers. If metric == 'Stein', then Y 
+        is an (K,s,s) array. If metric == 'Euclidean', then Y is an 
+        (K,s) array.
+    dist : array (optional)
+        An (K,) array with dist[i] = D(X, Y[:i]).
+    """
+    
+    # sanity checks:
+    assert isinstance(X, np.ndarray)
+    assert isinstance(K, int) and K > 0
+    assert isinstance(metric, str) or callable(metric)
+    assert init is None or (isinstance(init, np.ndarray) 
+                            and init.shape == X.shape[1:])
+    if isinstance(metric, str):
+        assert metric in ['Stein', 'Euclidean']
+        if metric == 'Stein':
+            assert X.ndim == 3
+            assert X.shape[1] == X.shape[2]
+        elif metric == 'Euclidean':
+            assert X.ndim == 2
+    
+    N = X.shape[0]
+    Y = np.empty((K,*X.shape[1:]))
+    mdist = np.empty((K,))
+    
+    # initialization:
+    if metric == 'Stein':
+        Y[0] = expmh(np.mean(logmh(X), axis=0))
+        dist = ctools.distancematrix_stein
+    elif metric == 'Euclidean':
+        Y[0] = np.mean(X, axis=0)
+        dist = cdist
+    elif callable(metric):
+        Y[0] = X[np.random.randint(N)]
+        dist = metric
+    if init is not None:
+        Y[0] = init
+    D = dist(X, Y[None,0])
+    Y[0] = X[np.argmin(D)] # assign nearest point
+    D = dist(X, Y[None,0])
+    imax = np.argmax(D)
+    mdist[0] = D[imax]
+    
+    # greedy iteration:
+    for i in range(1,K):
+        Y[i] = X[imax]
+        tmp = dist(X, Y[None,i])
+        D = np.minimum(D, tmp)
+        imax = np.argmax(D)
+        mdist[i] = D[imax]
+    if out_dist:
+        return Y, mdist
+    else:
+        return Y
+
 def inv_hpd(M):
+    
     """Computes the matrix inverse of a sequence of HPD matrices.
 
     Input is a (..,n,n) array M. Output is an array of the same shape as the
@@ -69,9 +157,9 @@ def inv_hpd(M):
     M = M.reshape((-1, *M.shape[-2:]))
     out = np.empty_like(M)
     if M.shape[-1] == 3:
-        out = cla.inv_3x3(M, out).reshape(shape)
+        out = Descriptor_Cython.Geometric_Mean_Utils.inv_3x3(M, out).reshape(shape)
     else:
-        out = inv_hpd(M, out).reshape(shape)
+        out = Descriptor_Cython.Geometric_Mean_Utils.inv_hpd(M, out).reshape(shape)
     return out
 
 def matrix_sym2vec(s):
@@ -122,44 +210,27 @@ def Gradient_Descent_Mean(Matrix_Array,prec = 1e-3,Max_Iter = 100):
     print('\n')
     print('Requered Iterations -------{:*^10}------- seconds'.format(t_end))
     return X_1,t_end,k
-    
 
-def Return_Descriptors(f_cov,layer_mask,Scan,save = True,Layers = 14):
-    assert f_cov.shape[0] == layer_mask.shape[0]
-    assert f_cov.shape[1] == layer_mask.shape[1]
-    assert f_cov.shape[2] == layer_mask.shape[2]
-    Layer_Descriptors= np.zeros((Layers,10,20,10*10))
-    Features = np.zeros((Layers,))
+' First dimension is the number of train data for Covariance Descriptor '   
+
+def Return_Descriptors(f_cov,Region_Mask,Train_Sample,save = True,Region_num = 2,K = 5,iter = 200):
+    Region_Descriptors= np.zeros((Region_num,300,3,7,7))
     starttime = time.time()
-    for i,scan in enumerate(Scan):
-        f_pd = f_cov[10:cropZ[1],5:layer_mask.shape[1]-50,scan-2:scan+2,:,:]
-        Mask = layer_mask[10:cropZ[1],5:layer_mask.shape[1]-50,scan-2:scan+2]
-        
-        ' Reduce Size randomly along X axis and each Scan '
-            
-        Index_x = np.random.choice(Mask.shape[1],np.int(Mask.shape[1]/8))
-        
-        f_pd = f_pd[:,Index_x,:,:,:]
-        Mask = Mask[:,Index_x,:]
-        print('Extract Descriptors from scan {:*^10}'.format(scan))
-        for k in range(Layers):
-            print('Extract Descriptors from Layer {:*^10}'.format(k))
-            
-            Ft_layer = f_pd[Mask == k]
-            print(Ft_layer.shape)
-            ' Pick Random Cov Matrices '
-    #for f_pd_noise,l in zip(List,Scan):
-    #    for k in range(14):
-    #        Mask = layer_mask[0:cropZ[1],:,l]
-    #        print(l,s)
-    #        Ft_layer = f_pd[0:cropZ[1],:,:,:][Mask == k]
-            print(Ft_layer.shape)
-            Layer_Descriptors[k,i,:,:] = K_means_python(Ft_layer,20,200)
+    for sample in range(Train_Sample):
+        for chan in range(3):
+            f_pd = f_cov[sample][:,:,chan,:,:]
+            Mask = Region_Mask[sample][:,:]
+            print('Extract Descriptors from Data_Sample {:*^10}'.format(sample))
+            for k in range(Region_num):
+                print('Extract Descriptors from Region {:*^10}'.format(k))
+                Ft_Region = f_pd[Mask == k]
+                ' Pick Random Cov Matrices '
+                Region_Descriptors[k,sample,chan,:,:] = K_means(Ft_Region,K,Max_Iter=iter)
     Endtime = time.time()-starttime
     print('Finished in ---{:*^10}---'.format(Endtime))
     if save == True:
-        np.save('Layer_Descriptors_Stein_new_P5_13',Layer_Descriptors) 
-    return Layer_Descriptors
+        np.save('/src/Covariance_Descriptor/Prototypes/Region_Descriptors_'+str(K),Region_Descriptors) 
+    return Region_Descriptors
 
 from scipy.linalg import schur
 
@@ -237,5 +308,6 @@ def SPD_Mean_Quadratic_1(Matrix_Array,Max_Iter = 120,tol=1e-4,Aut = True):
     t_end = time.time()-starttime
     print('Requered Iterations -------{:*^10}------- seconds'.format(t_end))
     return Mean,It,t_end
+
 
 

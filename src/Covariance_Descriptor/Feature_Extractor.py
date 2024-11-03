@@ -52,16 +52,17 @@ All filters, except for 'x' and 'y', are applied channel-wise. For example, for 
 """
 
 class Features:
-    def __init__(self,data,chanels_num ,Scale_List = [3,5,7,11,15],subtract_mean = True,Hdim = False,filter_list = 'x,z,I0,I,Ix,Iz,Ixx,Ixz,Izz'):
+    def __init__(self,data,chanels_num ,Scale_List = [3,5,7,11,15],subtract_mean = True,Hdim = False,filter_list = 'I0,I,Ix,Iz,Ixx,Ixz,Izz'):
         self.data = data
         self.subtract_mean = subtract_mean
         self.chanels_num = chanels_num 
         self.filter_list = filter_list
         self.HDim = Hdim
+        self.weights = filter_binomial(5,0,0)
         self.Scale_List = Scale_List # Max Response of filter outputs over scales
         self.f_vec = self.covariance_descriptor_3D(data,Scale_List,subtract_mean)
 
-    def covariance_from_fvec(self,weights):
+    def covariance_from_fvec(self):
         """
         Subroutine for computing covariance matrices for given feature vectors.
         """
@@ -70,7 +71,7 @@ class Features:
                 z,x,y,f = self.f_vec.shape
                 res = np.empty((z,x,y,f,f), dtype=self.f_vec.dtype)  # variable for the result
                 if self.subtract_mean:
-                    pz,px,py = weights.shape
+                    pz,px,py = self.weights.shape
                     weights_uniform = np.ones((pz,px,py)) / (px*py*pz)
                     fvec_mean = np.empty_like(self.f_vec) # (unweighted) mean of self.f_vec
                     fvec_mean_w = np.empty_like(self.f_vec) # weighted mean of self.f_vec
@@ -115,54 +116,55 @@ class Features:
         else:
             if self.HDim == True:
                 z,x,y,channels,f = self.f_vec.shape
-                res = np.empty((z,x,y,channals,f,f), dtype=self.f_vec.dtype)  # variable for the result
+                res = np.empty((z,x,y,channels,f,f), dtype=self.f_vec.dtype)  # variable for the result
                 if self.subtract_mean:
-                    pz,px,py = weights.shape
+                    pz,px,py = self.weights.shape
                     weights_uniform = np.ones((pz,px,py)) / (px*py*pz)
                     fvec_mean = np.empty_like(self.f_vec) # (unweighted) mean of self.f_vec
                     fvec_mean_w = np.empty_like(self.f_vec) # weighted mean of self.f_vec
                     for chan in range(channels):
                         for i in range(f):
                             fvec_mean[:,:,:,chan,i] = convolve(self.f_vec[:,:,:,chan,i], weights_uniform)
-                            fvec_mean_w[:,:,:,chan,i] = convolve(self.f_vec[:,:,:,chan,i], weights) 
+                            fvec_mean_w[:,:,:,chan,i] = convolve(self.f_vec[:,:,:,chan,i], self.weights) 
                     for chan in range(channels):
                         for i in range(f):
                             for j in range(i+1):
                                 res[:,:,:,chan,i,j] = convolve(self.f_vec[:,:,:,chan,i] * self.f_vec[:,:,:,chan,j], weights) \
                                     - fvec_mean[:,:,:,chan,i] * fvec_mean_w[:,:,:,chan,j] \
                                     - fvec_mean_w[:,:,:,chan,i] * fvec_mean[:,:,:,chan,j] \
-                                    + fvec_mean[:,:,:,chan,i] * fvec_mean[:,:,:,chan,j] * np.sum(weights)
+                                    + fvec_mean[:,:,:,chan,i] * fvec_mean[:,:,:,chan,j] * np.sum(self.weights)
                                 res[:,:,:,chan,j,i] = res[:,:,:,chan,i,j]
                 else:
-                    for i in range(f):
-                        for j in range(i+1):
-                            res[:,:,:,chani,j] = convolve(self.f_vec[:,:,:,chan,i] * self.f_vec[:,:,:,chan,j], weights)
-                            res[:,:,:,chan,j,i] = res[:,:,:,chan,i,j]
+                    for chan in range(channels):
+                        for i in range(f):
+                            for j in range(i+1):
+                                res[:,:,:,chan,j] = convolve(self.f_vec[:,:,:,chan,i] * self.f_vec[:,:,:,chan,j], self.weights)
+                                res[:,:,:,chan,j,i] = res[:,:,:,chan,i,j]
             else:
                 m,n,channels,f = self.f_vec.shape
                 res = np.empty((m,n,channels,f,f), dtype=self.f_vec.dtype)  # variable for the result
                 if self.subtract_mean:
-                    px,py = weights.shape
+                    px,py = self.weights.shape
                     weights_uniform = np.ones((px,py)) / (px*py)
                     fvec_mean = np.empty_like(self.f_vec) # (unweighted) mean of self.f_vec
                     fvec_mean_w = np.empty_like(self.f_vec) # weighted mean of self.f_vec
                     for chan in range(channels):
                         for i in range(f):
                             fvec_mean[:,:,chan,i] = convolve(self.f_vec[:,:,chan,i], weights_uniform)
-                            fvec_mean_w[:,:,chan,i] = convolve(self.f_vec[:,:,chan,i], weights) 
+                            fvec_mean_w[:,:,chan,i] = convolve(self.f_vec[:,:,chan,i], self.weights) 
                     for chan in range(channels):
                         for i in range(f):
                             for j in range(i+1):
-                                res[:,:,chan,i,j] = convolve(self.f_vec[:,:,chan,i] * self.f_vec[:,:,chan,j], weights) \
+                                res[:,:,chan,i,j] = convolve(self.f_vec[:,:,chan,i] * self.f_vec[:,:,chan,j], self.weights) \
                                     - fvec_mean[:,:,chan,i] * fvec_mean_w[:,:,chan,j] \
                                     - fvec_mean_w[:,:,chan,i] * fvec_mean[:,:,chan,j] \
-                                    + fvec_mean[:,:,chan,i] * fvec_mean[:,:,chan,j] * np.sum(weights)
+                                    + fvec_mean[:,:,chan,i] * fvec_mean[:,:,chan,j] * np.sum(self.weights)
                                 res[:,:,chan,j,i] = res[:,:,chan,i,j]
                 else:
                     for chan in range(channels):
                         for i in range(f):
                             for j in range(i+1):
-                                res[:,:,chan,i,j] = convolve(self.f_vec[:,:,chan,i] * self.f_vec[:,:,chan,j], weights)
+                                res[:,:,chan,i,j] = convolve(self.f_vec[:,:,chan,i] * self.f_vec[:,:,chan,j], self.weights)
                                 res[:,:,chan,j,i] = res[:,:,chan,i,j]
         return res
 

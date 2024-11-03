@@ -497,7 +497,7 @@ def logmh(cnp.ndarray[double, ndim=2, negative_indices=False] M):
     for j in range(n):
         for i in range(j+1,n):
             log_M[i,j] = log_M[j,i]
-    return log_M
+    return np.asarray(log_M)
 
 
 
@@ -527,7 +527,7 @@ def sqrtmh(cnp.ndarray[double, ndim=2, negative_indices=False] M):
     for j in range(n):
         for i in range(j+1,n):
             sqrt_M[i,j] = sqrt_M[j,i]
-    return sqrt_M
+    return np.asarray(sqrt_M)
 
 
 
@@ -551,7 +551,7 @@ def invh(cnp.ndarray[double, ndim=2, negative_indices=False] M):
     for j in range(n):
         for i in range(j+1,n):
             inv_M[i,j] = inv_M[j,i]
-    return inv_M
+    return np.asarray(inv_M)
 
 @cython.boundscheck(False)
 @cython.wraparound(False)

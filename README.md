@@ -1,25 +1,42 @@
 # Local_Feature_Extraction_Lib
 Library for extracting local features, prototypes on Curved Manifold of Symmetric Positive Definite Matrices (SPD) for low level image partitioning and distance computation. 
 
+![Image of horse at different levels of pixelation and detail](/docs/Horse.png)
+
 ## Partitioning of color images via different metrics (postively, negatily and flat) curved manifolds. 
 Supports Riemannian means including 
-   - Log-Euclidian Means using Euclidian Metrics proposed: 
-   - (Cheap Mean)
-   - (Bini Mean)
-   - Approximate Joint Diagonalization (JAD)
-   - Riamannian Mean
+   - **Log-Euclidian Means**
+   - **Cheap Mean**
+   - **Bini Mean**
+   - **Approximate Joint Diagonalization (AJD)**
+   - **Riamannian Mean**
+   - **Stein Divergence Mean**
    Comparison of key properties satisfied by the mean with respect to implemented metrics:
 
    ![titleimageA](/docs/Mean_Prop.png)
    
-   Left: A random test image whcih is not a member of the training set; Right: Riemannian distance and Stein Divergence with $400$ extracted covariance desriptors from the training set consisiting of 10 images. 
- 
-   ![PottsAndPALMS](/docs/Vis_Deep.png)
-   ![PottsAndPALMS](/docs/Deep_Cov_Vis.png)
-   
-   Left: Running Times of different algorithms; Center: Log Euclidian Mean; Right: piecewise affine-linear Mumford-Shah model
-   
-   - Scale of the partitioning is controlled by a model parameter
+   Left: Illustration of different geometric mean properties on the manifold of positive semidefinite matrices implemented in this library.  
+
+![titleimageA](/docs/Cluster_Prototypes.png)
+
+Deviation of the geometric means computed using the Log-Euclidian metric and Stein diver-
+gence, respectively, from the true Riemannian mean. Right: Runtime for geometric mean computation using
+the different metrics. All evaluations were performed on a randomly chosen subset of covariance descriptors
+representing the retinal nerve fibre layer in a real-world OCT scan. This highlights the advan-
+tages of using Stein the divergence in terms of approximation accuracy and efficient numerical computation.
+
+
+# Deep Features Extractor
+
+![titleimageA](/docs/Deep_Features.png)
+
+CNN architecture for feature extraction which
+comprises four residually connected blocks. For segmenting OCT-real valued data, the network produces
+a sequence of hidden states with channel dimen-
+sions 8, 16, 32, 64. Each block contains 3D con-
+volution with filter size 3 × 3 × 3 and rectified
+linear unit (ReLU) is used as activation func-
+tion.
 
   # Detailed Breakdown of the Code for Computing Covariance Descriptors for Image Data
 
@@ -120,6 +137,14 @@ Arguments of affineLinearPartitioning.m are:
  - f: input image (double)
  - gamma: boundary penalty (larger choice -> less segments)
  - varargin: optional input parameters
+
+# Medical Applications Scenarios on example of volumetric Optical-Coherance-Tomography data 
+
+![titleimageA](/docs/Segment_B_Scan.png)
+Labeled retina tissues using covariance descriptors
+and deep CNN features, respectively. The resulting segmentation obtained using the IOWA reference algorithm.
+
+![titleimageA](/docs/Segment_Volume.png)
 
 ## References
 - Dario A. Bini, Bruno Iannazzo,

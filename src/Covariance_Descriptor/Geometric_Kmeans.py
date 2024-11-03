@@ -30,6 +30,7 @@ def K_means(f_pd,K,Max_Iter = 100,n_init_kmeans=10,Method = 'Log_Euclid',Metric 
         '''Matrix_Log,such that |X|_2 = |log f_pd|_F, == vec(log_f_pd)'''
         
         X = linalgh.logmh(f_pd).reshape((N_Pixel,s*s)).dot(A.T)
+        print(X)
         # K_means on Eucliadian space == Tangential space log f_pd
         X = kmeans(X, K, n_init=n_init_kmeans)[0]
         # Transform to Manifold by exp such that G = exp(log X_1),...exp(log_X_K)
@@ -214,7 +215,7 @@ def Gradient_Descent_Mean(Matrix_Array,prec = 1e-3,Max_Iter = 100):
 ' First dimension is the number of train data for Covariance Descriptor '   
 
 def Return_Descriptors(f_cov,Region_Mask,Train_Sample,save = True,Region_num = 2,K = 5,iter = 200):
-    Region_Descriptors= np.zeros((Region_num,300,3,7,7))
+    Region_Descriptors= np.zeros((Region_num,300,3,K,7*7))
     starttime = time.time()
     for sample in range(Train_Sample):
         for chan in range(3):

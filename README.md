@@ -100,10 +100,8 @@ To extract features and compute the covariance matrix for a 3D image using prede
 
 ```python
 # Assuming 'image_data' is the input data, e.g., a 3D volume (m, n, p)
-
 # Initialize the Features class with image data
 features = Features(image_data)
-
 # Apply filters and compute covariance descriptors
 f_vec, cov_matrices = features.covariance_descriptor_3D(
     p_filter=5, 
@@ -115,9 +113,10 @@ f_vec, cov_matrices = features.covariance_descriptor_3D(
     weights='Gaussian', 
     HDim=True  # Assuming 3D data
 )
+```
 
-# `f_vec` contains the feature vectors
-# `cov_matrices` contains the covariance matrices for each pixel
+- `f_vec` contains the feature vectors
+- `cov_matrices` contains the covariance matrices for each pixel
 
 
 ## Installation
@@ -147,8 +146,11 @@ and deep CNN features, respectively. The resulting segmentation obtained using t
 ![titleimageA](/docs/Segment_Volume.png)
 
 ## References
+- Dmitrij Sitenko, Bastian Boll, and Christoph Schnörr,
+    " Assignment Flow for Order-Constrained OCT Segmentation."
+    International Journal of Computer Vision 129, 11 (Nov 2021), 3088–3118.
 - Dario A. Bini, Bruno Iannazzo,
-    "A note on computing matrix geometric means. Adv Comput Math."
+    "A note on computing matrix geometric means."
     Adv Comput Math 35, 175–192 (2011). https://doi.org/10.1007/s10444-010-9165-0
 - Dario A. Bini, Bruno Iannazzo,
     "Computing the Karcher mean of symmetric positive definite matrices."

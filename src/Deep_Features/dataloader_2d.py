@@ -1,57 +1,56 @@
-from util.layers import join_layers
-from util.path import read_vol_list
 import torch
 import numpy as np
-import os
+from PIL import Image
 from torch.utils import data
 from skimage.util import view_as_windows
-import glob
+import os
 
-def get_first_training_files(data_path, train=True):
+
+def get_first_training_files(path_dir,train=True):
     if train:
-        dset_files = read_vol_list("training_vols.csv")
+        path_to_train_data = os.path.join(path_dir,"training_data.csv")
+        dset_files = read_Image_list(path_to_train_data)
     else:
-        dset_files = read_vol_list("testing_vols.csv")
+        path_to_test_data = os.path.join(path_dir,"testing_data.csv")
+        dset_files = read_Image_list(path_to_test_data)
     assert len(dset_files) > 0, "No valid volume data was provided."
-    base_path = os.path.join(data_path, dset_files[0][:-4])
-    fname = f"{base_path}.npy"
-    gt_fname = f"{base_path}_gt.npy"
-    return fname, gt_fname
+    rel_path = dset_files[1]
+    path_train_im = rel_path[1][:-4]
+    path_label_im = rel_path[2][:-4]
+    return path_train_im, path_label_im
 
-def build_data_loader(data_path, size_window, c, batch_size=64, debug=0, workers=4, single_voxel_out=True, train=True):
+def build_data_loader(size_window, c,path_dir, batch_size=32, debug=0, workers=4, single_pixel_out=True, train=True):
     """
-    data_path:        Load data from here.
     size_window:      Spatial shape of input data to model.
     debug:            In debug mode, only part of the data is loaded.
-    single_voxel_out: Output is a single voxel label. This is in contrast to fully convolutional models which require a patch of voxels.
+    single_voxel_out: Output is a single pixel label. This is in contrast to fully convolutional models which require a patch of pixels.
     """
     if not debug == 1:
-        dataset = OCTPatchMultifileDataset(data_path, size_window, c, single_voxel_out=single_voxel_out, train=train)
+        dataset = Multiple_Image_Patch_Dataset(size_window, c,path_dir ,single_pixel_out=single_pixel_out, train=train)
     else:
-        fname, gt_fname = get_first_training_files(data_path, train)
-        dataset = OCTPatchDataset(fname, gt_fname, size_window, c, single_voxel_out=single_voxel_out)
+        fname, gt_fname = get_first_training_files(path_dir,train)
+        dataset = Image_Patch_Dataset(fname, gt_fname, size_window, c, single_pixel_out=single_pixel_out)
     return data.DataLoader(dataset, batch_size, shuffle=True, num_workers=workers)
 
-class OCTPatchMultifileDataset(data.Dataset):
+class Multiple_Image_Patch_Dataset(data.Dataset):
     """
-    Wraps multiple OCTPatchDataset instances, each pertaining to a single volume.
+    Wraps multiple Image data files instances.
     """
-    def __init__(self, data_dirpath, size_window, c, single_voxel_out=True, train=True):
+    def __init__(self, size_window, c,path_dir, single_pixel_out=True, train=True):
         """
         """
         self.dsets = []
 
         if train:
-            dset_files = read_vol_list("training_vols.csv")
+            path_to_train_data = os.path.join(path_dir,"training_data.csv")
+            dset_files = read_Image_list(path_to_train_data)
         else:
-            dset_files = read_vol_list("testing_vols.csv")
+            path_to_test_data = os.path.join(path_dir,"testing_data.csv")
+            dset_files = read_Image_list(path_to_test_data)
 
-        for rel_path in dset_files:
-            assert rel_path.endswith(".mat") or rel_path.endswith(".vol")
-            base_path = os.path.join(data_dirpath, rel_path[:-4])
-            fname = f"{base_path}.npy"
-            gt_fname = f"{base_path}_gt.npy"
-            self.dsets.append(OCTPatchDataset(fname, gt_fname, size_window, c, single_voxel_out=single_voxel_out))
+        for path_train_im,path_label_im in dset_files[1:]:
+            assert path_train_im.endswith(".png")
+            self.dsets.append(Image_Patch_Dataset(path_train_im, path_label_im, size_window, c, single_pixel_out=single_pixel_out))
 
     def __len__(self):
         return np.sum([len(ds) for ds in self.dsets])
@@ -65,51 +64,54 @@ class OCTPatchMultifileDataset(data.Dataset):
             else:
                 return ds[idx]
 
-class OCTPatchDataset(data.Dataset):
+class Image_Patch_Dataset(data.Dataset):
     """
-    Loads training data from a single OCT volume.
+    Loads training data from a single Image.
     """
-    def __init__(self, data_path, labels_path, size_window, c, single_voxel_out=True):
+    def __init__(self, data_path, labels_path, size_window, c, single_pixel_out=True):
         """
         """
-        self.raw_data = np.load(data_path)
+        mask = np.array([0.299,0.587,0.114])/(255.0)
+        self.raw_data = np.einsum('ijk,k->ij',np.array(Image.open(data_path).copy()).astype(np.double)[:,:,:],mask)
         self.size_window = size_window
         try:
-            self.view = view_as_windows(self.raw_data, (1, *size_window))
+            self.view = view_as_windows(self.raw_data, size_window)
         except:
-            print(f"Failed to stride volume {data_path} with shape {self.raw_data.shape} using window of size {size_window}. Skipping.")
-            self.view_spatial_shape = (0,0,0)
+            print(f"Failed to stride image {data_path} with shape {self.raw_data.shape} using window of size {size_window}. Skipping.")
             return
-        self.view_spatial_shape = self.view.shape[:3]
-        self.labels = np.load(labels_path)
+        self.view_spatial_shape = self.view.shape[:2]
+        self.labels = np.array(Image.open(labels_path).copy())
         
         c_dat = int(self.labels.max()) + 1
-        assert c_dat in [12, 14]
-        if c == 12 and c_dat == 14:
-            self.labels = join_layers(self.labels)
         
         assert self.labels.min() == 0
         assert self.labels.max() == c-1
         assert not np.isnan(np.sum(self.labels))
         assert not np.isnan(np.sum(self.raw_data))
         
-        self.single_voxel_out = single_voxel_out
-        if single_voxel_out:
-            ry, rz = (size_window[0] - 1)//2, (size_window[1] - 1)//2
-            self.labels = self.labels[:,ry:-ry,rz:-rz]
+        self.single_pixel_out = single_pixel_out
+        if single_pixel_out:
+            rx, ry = (size_window[0] - 1)//2, (size_window[1] - 1)//2
+            self.labels = self.labels[rx:-rx,ry:-ry]
             assert self.labels.shape == self.view_spatial_shape
         else:
-            self.label_view = view_as_windows(self.labels, (1, *size_window))
+            self.label_view = view_as_windows(self.labels, size_window)
 
     def __len__(self):
         return np.prod(self.view_spatial_shape)
     
     def __getitem__(self, idx):
-        (x,y,z) = np.unravel_index(idx, self.view_spatial_shape)
+        (x,y) = np.unravel_index(idx, self.view_spatial_shape)
 
-        patch = self.view[x,y,z,:,:,:].reshape(self.size_window)
-        if self.single_voxel_out:
-            patch = patch.reshape((1,*self.size_window))
-            return torch.FloatTensor(patch), torch.LongTensor(self.labels[x,y,z].reshape((1,)))
-        labels = self.label_view[x,y,z,:,:,:]
+        patch = self.view[x,y,:,:].reshape(self.size_window)
+        if self.single_pixel_out:
+            patch = patch.reshape((self.size_window))
+            return torch.FloatTensor(patch), torch.LongTensor(self.labels[x,y].reshape((1,)))
+        labels = self.label_view[x,y,:,:]
         return torch.FloatTensor(patch), torch.LongTensor(labels.reshape(self.size_window))
+
+def read_Image_list(path):
+    with open(path, "r") as f:
+        lines = f.readlines()
+    fpaths = [fn[:-1].split(',')[1:] if fn.endswith("\n") else fn for fn in lines]
+    return fpaths

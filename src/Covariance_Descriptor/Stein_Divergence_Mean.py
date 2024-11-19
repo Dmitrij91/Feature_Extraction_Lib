@@ -1,5 +1,7 @@
 from Geometric_Kmeans import matrix_sym2vec
 import Descriptor_Cython
+from scipy.spatial.distance import cdist
+from linalgh import logmh,expmh
 import numpy as np
 import time
 from scipy.linalg import expm,logm
@@ -85,16 +87,16 @@ def Log_Euclid_Distance(Matrix_Features,Prototypes):
     Prototypes_Vec   =  np.zeros((Prototypes.shape[0],Prototypes.shape[1],int((s+1)*s/2)))
     
     for k in range(Prototypes.shape[0]):
-        Prototypes_Vec[k,:,:] = Descriptor_Cython.Geometric_Mean_Utils.logmh(Prototypes.astype(np.double)[k,:,:,:]).reshape(Prototypes.shape[1],s*s).dot(A.T)
+        Prototypes_Vec[k,:,:] = logmh(Prototypes.astype(np.double)[k,:,:,:]).reshape(Prototypes.shape[1],s*s).dot(A.T)
     
-    Matrix_Array_Vec = Descriptor_Cython.Geometric_Mean_Utils.logmh(Matrix_Features.astype(np.double).reshape((x*y*z,s,s))).reshape(x*y*z,s*s).dot(A.T)
+    Matrix_Array_Vec = logmh(Matrix_Features.astype(np.double).reshape((x*y*z,s,s))).reshape(x*y*z,s*s).dot(A.T)
     
     'Inititlize Distance Matrix'
     
     Distance = np.zeros((x*y*z,Prototypes.shape[0],Prototypes.shape[1]))
     
     for k in range(Prototypes.shape[1]):
-        Distance[:,:,k] = Descriptor_Cython.Geometric_Mean_Utils.cdistance(Matrix_Array_Vec,Prototypes_Vec[:,k,:])
+        Distance[:,:,k] = cdist(Matrix_Array_Vec,Prototypes_Vec[:,k,:])
     return Distance.reshape(x,y,z,Prototypes.shape[0],Prototypes.shape[1])
     
             

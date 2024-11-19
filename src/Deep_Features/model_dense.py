@@ -1,5 +1,6 @@
 import torch.nn as nn
 
+
 def build_activation(activation_name):
     activation_funcs = nn.ModuleDict([
         ['elu',         nn.ELU()],

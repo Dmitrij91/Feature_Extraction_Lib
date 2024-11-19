@@ -7,9 +7,10 @@ import linalgh
 import numpy as np
 import time
 from scipy.linalg import sqrtm,logm,expm
+from joblib import Parallel, delayed
 
 
-def K_means(f_pd,K,Max_Iter = 100,n_init_kmeans=10,Method = 'Log_Euclid',Metric = 'Riemmann'):
+def K_means(f_pd,K,Max_Iter = 100,n_init_kmeans=10,Method = 'Log_Euclid',Metric = 'Log_Det'):
     s = f_pd.shape[2]
     N_Pixel = f_pd.shape[0]
     Random_Indices = np.random.choice(N_Pixel,K)
@@ -30,7 +31,6 @@ def K_means(f_pd,K,Max_Iter = 100,n_init_kmeans=10,Method = 'Log_Euclid',Metric 
         '''Matrix_Log,such that |X|_2 = |log f_pd|_F, == vec(log_f_pd)'''
         
         X = linalgh.logmh(f_pd).reshape((N_Pixel,s*s)).dot(A.T)
-        print(X)
         # K_means on Eucliadian space == Tangential space log f_pd
         X = kmeans(X, K, n_init=n_init_kmeans)[0]
         # Transform to Manifold by exp such that G = exp(log X_1),...exp(log_X_K)
@@ -214,26 +214,44 @@ def Gradient_Descent_Mean(Matrix_Array,prec = 1e-3,Max_Iter = 100):
 
 ' First dimension is the number of train data for Covariance Descriptor '   
 
-def Return_Descriptors(f_cov,Region_Mask,Train_Sample,save = True,Region_num = 2,K = 5,iter = 200):
-    Region_Descriptors= np.zeros((Region_num,300,3,K,7*7))
-    starttime = time.time()
-    for sample in range(Train_Sample):
-        for chan in range(3):
-            f_pd = f_cov[sample][:,:,chan,:,:]
-            Mask = Region_Mask[sample][:,:]
-            print('Extract Descriptors from Data_Sample {:*^10}'.format(sample))
-            for k in range(Region_num):
-                print('Extract Descriptors from Region {:*^10}'.format(k))
-                Ft_Region = f_pd[Mask == k]
-                ' Pick Random Cov Matrices '
-                Region_Descriptors[k,sample,chan,:,:] = K_means(Ft_Region,K,Max_Iter=iter)
-    Endtime = time.time()-starttime
-    print('Finished in ---{:*^10}---'.format(Endtime))
-    if save == True:
-        np.save('/src/Covariance_Descriptor/Prototypes/Region_Descriptors_'+str(K),Region_Descriptors) 
-    return Region_Descriptors
+def extract_descriptors_for_sample_region(f_cov, Region_Mask, sample, region, K, iter_num):
+    """
+    Helper function to process descriptors for a given sample and region.
+    """
+    print('Extract Descriptors from Data_Sample {:*^10}'.format(sample))
+    f_pd = f_cov[sample]  # Extract sample-specific covariance matrices
+    Mask = Region_Mask[sample]  # Extract sample-specific mask
+    Ft_Region = f_pd[Mask == region]  # Extract features for the specified region
+    return sample, region, K_means(Ft_Region, K, Max_Iter=iter_num)  # Returns descriptors
 
-from scipy.linalg import schur
+def Return_Descriptors(f_cov, Region_Mask, Train_Sample, save=True, Region_num=2, K=5, iter_num=200):
+    """
+    Extracts region descriptors for given covariance matrices and region masks
+    with full parallelization across Train_Sample and Region_num.
+    """
+    num_features = f_cov[0].shape[3]
+    Region_Descriptors = np.zeros((Region_num, Train_Sample, K, num_features * num_features))
+    starttime = time.time()
+
+    # Parallel processing of all (sample, region) combinations
+    # n_jobs = -1 maximal number of cores available 
+    results = Parallel(n_jobs=-1)(
+        delayed(extract_descriptors_for_sample_region)(f_cov, Region_Mask, sample, region, K, iter_num)
+        for sample in range(Train_Sample)
+        for region in range(Region_num)
+    )
+    
+    # Populate Region_Descriptors with results
+    for sample, region, descriptors in results:
+        Region_Descriptors[region, sample, :, :] = descriptors
+
+    Endtime = time.time() - starttime
+    print(f'Finished in ---{Endtime}---')
+
+    if save:
+        np.save('/home/dmitrij/Documents/HDE_Code_Folder/Feature_Extraction_Lib/src/Covariance_Descriptor/Prototypes/Region_Descriptors_'+str(K), Region_Descriptors)
+    
+    return Region_Descriptors
 
 
 def SPD_Mean_Quadratic_1(Matrix_Array,Max_Iter = 120,tol=1e-4,Aut = True):

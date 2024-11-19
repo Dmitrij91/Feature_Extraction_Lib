@@ -1,4 +1,4 @@
-# Local_Feature_Extraction_Lib
+# Local Features Extraction Lib
 Library for extracting local features, prototypes on Curved Manifold of Symmetric Positive Definite Matrices (SPD) for low level image partitioning and distance computation. 
 
 ![Image of horse at different levels of pixelation and detail](/docs/Horse.png)

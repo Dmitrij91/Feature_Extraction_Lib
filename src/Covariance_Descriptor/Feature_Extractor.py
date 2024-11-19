@@ -2,6 +2,8 @@ import numpy as np
 from scipy.ndimage.filters import convolve, convolve1d
 from scipy.special import binom
 from scipy.ndimage.filters import gaussian_filter as gaussian
+from skimage.color import rgb2hsv
+from skimage.util import view_as_windows
 
 """
 This class computes the covariance region descriptors for the given data using a set of filters.
@@ -28,7 +30,7 @@ The following filters are available for feature extraction:
 - **'|Iyy|'**: absolute value of the filter 'Iyy'
 - **'|M|'**: absolute value of the filter 'M'
 
-All filters, except for 'x' and 'y', are applied channel-wise. For example, for an RGB image, applying the filters 'x', 'y', 'I', 'Ix', 'Iy' results in feature vectors of the form: `x, y, R, G, B, Rx, Gx, Bx, Ry, Gy, By`. The derivatives are computed using a binomial filter with size `(p_filter, p_filter)`.
+All filters, except for 'x' and 'y', are applied channel-wise. For example, for an RGB image, applying the filters 'x', 'y', H,S,V,'I', 'Ix', 'Iy' results in feature vectors of the form: `x, y, R, G, B, Rx, Gx, Bx, Ry, Gy, By`. The derivatives are computed using a binomial filter with size `(p_filter, p_filter)`.
 
 ### Parameters:
 - **self.data**: `array`
@@ -52,15 +54,26 @@ All filters, except for 'x' and 'y', are applied channel-wise. For example, for 
 """
 
 class Features:
-    def __init__(self,data,chanels_num ,Scale_List = [3,5,7,11,15],subtract_mean = True,Hdim = False,filter_list = 'I0,I,Ix,Iz,Ixx,Ixz,Izz'):
+    def __init__(self,data,chanels_num,Scale_List = [7],subtract_mean = True,Hdim = False,filter_list = 'E,x,z,H,S,V,I,Ix,Iz,Ixx,Ixz,Izz,|gradI|',pad_x = 11,pad_y = 11,sigma_E = 1):
         self.data = data
         self.subtract_mean = subtract_mean
         self.chanels_num = chanels_num 
         self.filter_list = filter_list
         self.HDim = Hdim
-        self.weights = filter_binomial(5,0,0)
+        self.pad_x = pad_x
+        self.pad_y = pad_y
+        self.sigma_E = sigma_E
+        self.weights = filter_binomial(3,0,0)
         self.Scale_List = Scale_List # Max Response of filter outputs over scales
-        self.f_vec = self.covariance_descriptor_3D(data,Scale_List,subtract_mean)
+        self.f_vec = self.covariance_descriptor_3D(data,chanels_num,Scale_List,subtract_mean)
+
+    def Entropy_Filter(self,I):
+        I_window = np.exp(-(view_as_windows(np.pad(I,((int((self.pad_x-1)/2),\
+            int((self.pad_x-1)/2)),(int((self.pad_y-1)/2),int((self.pad_y-1)/2)))),\
+                       (self.pad_x,self.pad_y)).reshape(*I[:,:].shape,-1))/self.sigma_E)
+        I_window = I_window/(np.sum(I_window,axis = 2)[:,:,None])
+        return np.einsum('ijk,ijk->ij',I_window,-np.log(I_window))
+      
 
     def covariance_from_fvec(self):
         """
@@ -77,98 +90,94 @@ class Features:
                     fvec_mean_w = np.empty_like(self.f_vec) # weighted mean of self.f_vec
                     for i in range(f):
                         fvec_mean[:,:,:,i] = convolve(self.f_vec[:,:,:,i], weights_uniform)
-                        fvec_mean_w[:,:,:,i] = convolve(self.f_vec[:,:,:,i], weights) 
+                        fvec_mean_w[:,:,:,i] = convolve(self.f_vec[:,:,:,i], self.weights) 
                     for i in range(f):
                         for j in range(i+1):
-                            res[:,:,:,i,j] = convolve(self.f_vec[:,:,:,i] * self.f_vec[:,:,:,j], weights) \
+                            res[:,:,:,i,j] = convolve(self.f_vec[:,:,:,i] * self.f_vec[:,:,:,j], self.weights) \
                                 - fvec_mean[:,:,:,i] * fvec_mean_w[:,:,:,j] \
                                 - fvec_mean_w[:,:,:,i] * fvec_mean[:,:,:,j] \
-                                + fvec_mean[:,:,:,i] * fvec_mean[:,:,:,j] * np.sum(weights)
+                                + fvec_mean[:,:,:,i] * fvec_mean[:,:,:,j] * np.sum(self.weights)
                             res[:,:,:,j,i] = res[:,:,:,i,j]
                 else:
                     for i in range(f):
                         for j in range(i+1):
-                            res[:,:,:,i,j] = convolve(self.f_vec[:,:,:,i] * self.f_vec[:,:,:,j], weights)
+                            res[:,:,:,i,j] = convolve(self.f_vec[:,:,:,i] * self.f_vec[:,:,:,j], self.weights)
                             res[:,:,:,j,i] = res[:,:,:,i,j]
             else:
                 m,n,f = self.f_vec.shape
                 res = np.empty((m,n,f,f), dtype=self.f_vec.dtype)  # variable for the result
                 if self.subtract_mean:
-                    px,py = weights.shape
+                    px,py = self.weights.shape
                     weights_uniform = np.ones((px,py)) / (px*py)
                     fvec_mean = np.empty_like(self.f_vec) # (unweighted) mean of self.f_vec
                     fvec_mean_w = np.empty_like(self.f_vec) # weighted mean of self.f_vec
                     for i in range(f):
                         fvec_mean[:,:,i] = convolve(self.f_vec[:,:,i], weights_uniform)
-                        fvec_mean_w[:,:,i] = convolve(self.f_vec[:,:,i], weights) 
+                        fvec_mean_w[:,:,i] = convolve(self.f_vec[:,:,i], self.weights) 
                     for i in range(f):
                         for j in range(i+1):
-                            res[:,:,i,j] = convolve(self.f_vec[:,:,i] * self.f_vec[:,:,j], weights) \
+                            res[:,:,i,j] = convolve(self.f_vec[:,:,i] * self.f_vec[:,:,j], self.weights) \
                                 - fvec_mean[:,:,i] * fvec_mean_w[:,:,j] \
                                 - fvec_mean_w[:,:,i] * fvec_mean[:,:,j] \
-                                + fvec_mean[:,:,i] * fvec_mean[:,:,j] * np.sum(weights)
+                                + fvec_mean[:,:,i] * fvec_mean[:,:,j] * np.sum(self.weights)
                             res[:,:,j,i] = res[:,:,i,j]
                 else:
                     for i in range(f):
                         for j in range(i+1):
-                            res[:,:,i,j] = convolve(self.f_vec[:,:,i] * self.f_vec[:,:,j], weights)
+                            res[:,:,i,j] = convolve(self.f_vec[:,:,i] * self.f_vec[:,:,j], self.weights)
                             res[:,:,j,i] = res[:,:,i,j]
         else:
             if self.HDim == True:
-                z,x,y,channels,f = self.f_vec.shape
-                res = np.empty((z,x,y,channels,f,f), dtype=self.f_vec.dtype)  # variable for the result
+                z,x,y,f = self.f_vec.shape
+                res = np.empty((z,x,y,f,f), dtype=self.f_vec.dtype)  # variable for the result
                 if self.subtract_mean:
                     pz,px,py = self.weights.shape
                     weights_uniform = np.ones((pz,px,py)) / (px*py*pz)
                     fvec_mean = np.empty_like(self.f_vec) # (unweighted) mean of self.f_vec
                     fvec_mean_w = np.empty_like(self.f_vec) # weighted mean of self.f_vec
-                    for chan in range(channels):
-                        for i in range(f):
-                            fvec_mean[:,:,:,chan,i] = convolve(self.f_vec[:,:,:,chan,i], weights_uniform)
-                            fvec_mean_w[:,:,:,chan,i] = convolve(self.f_vec[:,:,:,chan,i], self.weights) 
-                    for chan in range(channels):
-                        for i in range(f):
-                            for j in range(i+1):
-                                res[:,:,:,chan,i,j] = convolve(self.f_vec[:,:,:,chan,i] * self.f_vec[:,:,:,chan,j], weights) \
-                                    - fvec_mean[:,:,:,chan,i] * fvec_mean_w[:,:,:,chan,j] \
-                                    - fvec_mean_w[:,:,:,chan,i] * fvec_mean[:,:,:,chan,j] \
-                                    + fvec_mean[:,:,:,chan,i] * fvec_mean[:,:,:,chan,j] * np.sum(self.weights)
-                                res[:,:,:,chan,j,i] = res[:,:,:,chan,i,j]
+                    for i in range(f):
+                        fvec_mean[:,:,:,i] = convolve(self.f_vec[:,:,:,i], weights_uniform)
+                        fvec_mean_w[:,:,:,i] = convolve(self.f_vec[:,:,:,i], self.weights) 
+                    for i in range(f):
+                        for j in range(i+1):
+                            res[:,:,:i,j] = convolve(self.f_vec[:,:,:,i] * self.f_vec[:,:,:,j], self.weights) \
+                                - fvec_mean[:,:,:,i] * fvec_mean_w[:,:,:,j] \
+                                - fvec_mean_w[:,:,:,i] * fvec_mean[:,:,:,j] \
+                                + fvec_mean[:,:,:,i] * fvec_mean[:,:,:,j] * np.sum(self.weights)
+                            res[:,:,:,j,i] = res[:,:,:,i,j]
                 else:
-                    for chan in range(channels):
-                        for i in range(f):
-                            for j in range(i+1):
-                                res[:,:,:,chan,j] = convolve(self.f_vec[:,:,:,chan,i] * self.f_vec[:,:,:,chan,j], self.weights)
-                                res[:,:,:,chan,j,i] = res[:,:,:,chan,i,j]
+                    for i in range(f):
+                        for j in range(i+1):
+                            res[:,:,:,j] = convolve(self.f_vec[:,:,:,i] * self.f_vec[:,:,:,j], self.weights)
+                            res[:,:,:,j,i] = res[:,:,:,i,j]
             else:
-                m,n,channels,f = self.f_vec.shape
-                res = np.empty((m,n,channels,f,f), dtype=self.f_vec.dtype)  # variable for the result
+                m,n,f = self.f_vec.shape
+                res = np.empty((m,n,f,f), dtype=self.f_vec.dtype)  # variable for the result
                 if self.subtract_mean:
                     px,py = self.weights.shape
                     weights_uniform = np.ones((px,py)) / (px*py)
                     fvec_mean = np.empty_like(self.f_vec) # (unweighted) mean of self.f_vec
                     fvec_mean_w = np.empty_like(self.f_vec) # weighted mean of self.f_vec
-                    for chan in range(channels):
-                        for i in range(f):
-                            fvec_mean[:,:,chan,i] = convolve(self.f_vec[:,:,chan,i], weights_uniform)
-                            fvec_mean_w[:,:,chan,i] = convolve(self.f_vec[:,:,chan,i], self.weights) 
-                    for chan in range(channels):
-                        for i in range(f):
-                            for j in range(i+1):
-                                res[:,:,chan,i,j] = convolve(self.f_vec[:,:,chan,i] * self.f_vec[:,:,chan,j], self.weights) \
-                                    - fvec_mean[:,:,chan,i] * fvec_mean_w[:,:,chan,j] \
-                                    - fvec_mean_w[:,:,chan,i] * fvec_mean[:,:,chan,j] \
-                                    + fvec_mean[:,:,chan,i] * fvec_mean[:,:,chan,j] * np.sum(self.weights)
-                                res[:,:,chan,j,i] = res[:,:,chan,i,j]
+                
+                    for i in range(f):
+                        fvec_mean[:,:,i] = convolve(self.f_vec[:,:,i], weights_uniform)
+                        fvec_mean_w[:,:,i] = convolve(self.f_vec[:,:,i], self.weights) 
+                
+                    for i in range(f):
+                        for j in range(i+1):
+                            res[:,:,i,j] = convolve(self.f_vec[:,:,i] * self.f_vec[:,:,j], self.weights) \
+                                - fvec_mean[:,:,i] * fvec_mean_w[:,:,j] \
+                                - fvec_mean_w[:,:,i] * fvec_mean[:,:,j] \
+                                + fvec_mean[:,:,i] * fvec_mean[:,:,j] * np.sum(self.weights)
+                            res[:,:,j,i] = res[:,:,i,j]
                 else:
-                    for chan in range(channels):
-                        for i in range(f):
-                            for j in range(i+1):
-                                res[:,:,chan,i,j] = convolve(self.f_vec[:,:,chan,i] * self.f_vec[:,:,chan,j], self.weights)
-                                res[:,:,chan,j,i] = res[:,:,chan,i,j]
+                    for i in range(f):
+                        for j in range(i+1):
+                            res[:,:,i,j] = convolve(self.f_vec[:,:,i] * self.f_vec[:,:,j], self.weights)
+                            res[:,:,j,i] = res[:,:,i,j]
         return res
 
-    def covariance_descriptor_3D(self,data,Scale_List,subtract_mean,p_filter = 5, p_cov = 5,eps_pd = 0.0, filter_masks = [],HDim = False):
+    def covariance_descriptor_3D(self,data,channel_num,Scale_List,subtract_mean,p_filter = 3, p_cov = 3,eps_pd = 0.0, filter_masks = [],HDim = False):
         
         # sanity checks:
         assert isinstance(p_filter, int), "p should be an integer!"
@@ -203,20 +212,15 @@ class Features:
 
         # generate list of filter functions (which are applied afterwards):
         if HDim:
-            print("HDIM")
-            self.filter_list = 'x,y,z,I0,I,Ix,Iy,Iz,Ixx,Ixy,Iyy,Ixz,Iyz,Izz'
-            self.filter_list = self.filter_list.split(',')
             filter_funcs = []
             ind_mask = 0
             for filt in self.filter_list:
                 if filt == 'y':
                     filter_funcs.append([lambda I,res=ind[2][::-1]: ind[2]/I.shape[2]])
                 elif filt == 'x':
-                    filter_funcs.append([
-                        lambda I,res=ind[1][::-1]: ind[1][::-1]/I.shape[1]])
+                    filter_funcs.append([lambda I,res=ind[1][::-1]: ind[1][::-1]/I.shape[1]])
                 elif filt == 'z':
-                    filter_funcs.append(
-                        [lambda I,res=ind[0][::-1]: ind[0][::-1]/I.shape[0]])
+                    filter_funcs.append([lambda I,res=ind[0][::-1]: ind[0][::-1]/I.shape[0]])
                 elif filt == 'I0':
                     for j in range(data.shape[3]):
                         filter_funcs.append([lambda I,k=j: I[:,:,:,k] ])
@@ -390,106 +394,232 @@ class Features:
                     Response.append(filter_scale(data))
                 f_vec[:,:,:,i] = np.array(Response).max(0)
         else:
-            filter_funcs = []
-            ind_mask = 0
-            for filt in self.filter_list:
-                if filt == 'x':
-                    filter_funcs.append([
-                        lambda I,res=ind[1][::-1]: ind[1][::-1]/I.shape[1]])
-                elif filt == 'z':
-                    filter_funcs.append(
-                        [lambda I,res=ind[0][::-1]: ind[0][::-1]/I.shape[0]])
-                elif filt == 'I0':
-                    filter_funcs.append([lambda I: I[:,:] ])
-                elif filt == 'I':
-                    filter_funcs.append([
-                        lambda I,h=filter_binomial(p_filter,0,0): 
-                                convolve(I[:,:],h)] )
-                elif filt == 'Ix':
-                    List = []
-                    Smooth = filter_binomial1d(3,0)
-                    for size in Scale_List:
-                        List.append(
-                            lambda I,h=filter_binomial1d(size,1): 
-                                convolve1d(convolve1d(I[:,:],h,axis = 1),Smooth,axis = 0))
-                    filter_funcs.append(List)
-                elif filt == 'Iz':
-                    List = []
-                    Smooth = filter_binomial1d(3,0)
-                    for size in Scale_List:
-                        List.append(
-                            lambda I,h=filter_binomial1d(size,1): 
-                                convolve1d(convolve1d(I[:,:],h,axis = 0),Smooth,axis = 1))
-                    filter_funcs.append(List)
-                elif filt == 'Izz':
-                    List = []
-                    Smooth = filter_binomial1d(3,0)
-                    for size in Scale_List:
-                        List.append(
-                            lambda I,h=filter_binomial1d(size,2): 
-                                convolve1d(convolve1d(I[:,:],h,axis = 0),Smooth,axis = 1))
+            if channel_num == 1:
+                filter_funcs = []
+                ind_mask = 0
+                for filt in self.filter_list:
+                    if filt == 'x':
+                        filter_funcs.append([
+                            lambda I,res=ind[1][::-1]: ind[1][::-1]/I.shape[1]])
+                    elif filt == 'z':
+                        filter_funcs.append(
+                            [lambda I,res=ind[0][::-1]: ind[0][::-1]/I.shape[0]])
+                    elif filt == 'I0':
+                        filter_funcs.append([lambda I: I[:,:] ])
+                    elif filt == 'I':
+                        filter_funcs.append([
+                            lambda I,h=filter_binomial(p_filter,0,0): 
+                                    convolve(I[:,:],h)] )
+                    elif filt == 'Ix':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,1): 
+                                    convolve1d(convolve1d(I[:,:],h,axis = 1),Smooth,axis = 0))
+                        filter_funcs.append(List)
+                    elif filt == 'Iz':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,1): 
+                                    convolve1d(convolve1d(I[:,:],h,axis = 0),Smooth,axis = 1))
+                        filter_funcs.append(List)
+                    elif filt == 'Izz':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,2): 
+                                    convolve1d(convolve1d(I[:,:],h,axis = 0),Smooth,axis = 1))
 
-                    filter_funcs.append(List)
-                elif filt == 'Ixz':
-                    List = []
-                    Smooth = filter_binomial1d(3,0)
-                    for size in Scale_List:
-                        List.append(
-                            lambda I,h=filter_binomial1d(size,2): 
-                                convolve1d(convolve1d(I[:,:],h,axis = 1),h,axis = 0))
-                    filter_funcs.append(List)
-                elif filt == 'Ixx':
-                    List = []
-                    Smooth = filter_binomial1d(3,0)
-                    for size in Scale_List:
-                        List.append(
-                            lambda I,h=filter_binomial1d(size,2): 
-                                convolve1d(convolve1d(I[:,:],h,axis = 1),h,axis = 0))
-                    filter_funcs.append(List)
-                elif filt == 'M':
-                    filter_funcs.append(
-                        lambda I,h=filter_masks[ind_mask]: 
-                            convolve(I[:,:],h) )
-                    ind_mask += 1
-                elif filt == '|Ix|':
-                    filter_funcs.append(lambda I,h=filter_binomial(p_filter,1,0,0): 
-                            np.abs(convolve(I[:,:],h)) )
-                elif filt == '|Iz|':
-                    filter_funcs.append(
-                        lambda I,h=filter_binomial_3D(p_filter,0,1,0): 
-                            np.abs(convolve(I[:,:],h)) )
-                elif filt == '|gradI|':
-                    filter_funcs.append(
-                        lambda I, hx=filter_binomial_3D(p_filter,1,0,0),hz = filter_binomial_3D(p_filter,0,1,0):
-                            np.sqrt(convolve(I[:,:],hx)**2+convolve(I[:,:],hz)**2) )
-                elif filt == '|Ixx|':
-                    filter_funcs.append(
-                        lambda I,h=filter_binomial_3D(p_filter,2,0,0): 
-                            np.abs(convolve(I[:,:],h)) )
-                elif filt == '|Ixz|':
-                    filter_funcs.append(
-                        lambda I,h=filter_binomial_3D(p_filter,1,1,0): 
-                            np.abs(convolve(I[:,:],h)) )
-                elif filt == '|Izz|':
-                    filter_funcs.append(
-                        lambda I,h=filter_binomial_3D(p_filter,0,2,0): 
-                            np.abs(convolve(I[:,:],h)) )
-                elif filt == '|M|':
-                    filter_funcs.append(
-                        lambda I,h=filter_masks[ind_mask]: 
-                            np.abs(convolve(I[:,:],h)) )
-                    ind_mask += 1
-                else:
-                    print('Unknown filter!')
+                        filter_funcs.append(List)
+                    elif filt == 'Ixz':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,2): 
+                                    convolve1d(convolve1d(I[:,:],h,axis = 1),h,axis = 0))
+                        filter_funcs.append(List)
+                    elif filt == 'Ixx':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,2): 
+                                    convolve1d(convolve1d(I[:,:],h,axis = 1),h,axis = 0))
+                        filter_funcs.append(List)
+                    elif filt == 'M':
+                        filter_funcs.append(
+                            lambda I,h=filter_masks[ind_mask]: 
+                                convolve(I[:,:],h) )
+                        ind_mask += 1
+                    elif filt == '|Ix|':
+                        filter_funcs.append(lambda I,h=filter_binomial(p_filter,1,0,0): 
+                                np.abs(convolve(I[:,:],h)) )
+                    elif filt == '|Iz|':
+                        filter_funcs.append(
+                            lambda I,h=filter_binomial_3D(p_filter,0,1,0): 
+                                np.abs(convolve(I[:,:],h)) )
+                    elif filt == '|gradI|':
+                        filter_funcs.append(
+                            lambda I, hx=filter_binomial_3D(p_filter,1,0,0),hz = filter_binomial_3D(p_filter,0,1,0):
+                                np.sqrt(convolve(I[:,:],hx)**2+convolve(I[:,:],hz)**2) )
+                    elif filt == '|Ixx|':
+                        filter_funcs.append(
+                            lambda I,h=filter_binomial(p_filter,2,0,0): 
+                                np.abs(convolve(I[:,:],h)) )
+                    elif filt == '|Ixz|':
+                        filter_funcs.append(
+                            lambda I,h=filter_binomial(p_filter,1,1,0): 
+                                np.abs(convolve(I[:,:],h)) )
+                    elif filt == '|Izz|':
+                        filter_funcs.append(
+                            lambda I,h=filter_binomial(p_filter,0,2,0): 
+                                np.abs(convolve(I[:,:],h)) )
+                    elif filt == '|M|':
+                        filter_funcs.append(
+                            lambda I,h=filter_masks[ind_mask]: 
+                                np.abs(convolve(I[:,:],h)) )
+                        ind_mask += 1
+                    else:
+                        print('Unknown filter!')
                 # apply filters to image
-            f_vec = np.empty((data.shape[0],data.shape[1],data.shape[2],len(self.filter_list)), 
-                                dtype=data.dtype)
-            for j in range(data.shape[2]):
-                for i in range(0,f_vec.shape[3]):
+                f_vec = np.empty((data.shape[0],data.shape[1],len(self.filter_list)), 
+                                    dtype=data.dtype)
+            else:
+                mask = np.array([0.299,0.587,0.114])/(255.0)
+                filter_funcs = []
+                ind_mask = 0
+                for filt in self.filter_list:
+                    if filt == 'x':
+                        filter_funcs.append([lambda I,res=ind[1][::-1]: ind[1][::-1]/I.shape[1]])
+                    elif filt == 'z':
+                        filter_funcs.append([lambda I,res=ind[0][::-1]: ind[0][::-1]/I.shape[0]])
+                    elif filt == 'H':
+                        filter_funcs.append([lambda I: rgb2hsv(I)[:,:,0] ])
+                    elif filt == 'S':
+                        filter_funcs.append([lambda I: rgb2hsv(I)[:,:,1] ])
+                    elif filt == 'V':
+                        filter_funcs.append([lambda I: rgb2hsv(I)[:,:,2] ])
+                    elif filt == 'I':
+                        filter_funcs.append([
+                            lambda I,h=filter_binomial(p_filter,0,0): 
+                                    convolve(np.einsum('ijk,k->ij',I[:,:,:],mask),h)] )
+                    elif filt == 'Ix':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,1): 
+                                    convolve1d(convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 1),Smooth,axis = 0))
+                        filter_funcs.append(List)
+                    elif filt == 'Iz':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,1): 
+                                    convolve1d(convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 0),Smooth,axis = 1))
+                        filter_funcs.append(List)
+                    elif filt == 'Izz':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,2): 
+                                    convolve1d(convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 0),Smooth,axis = 1))
+
+                        filter_funcs.append(List)
+                    elif filt == 'Ixz':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,2): 
+                                    convolve1d(convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 1),h,axis = 0))
+                        filter_funcs.append(List)
+                    elif filt == 'Ixx':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,2): 
+                                    convolve1d(convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 1),Smooth,axis = 0))
+                        filter_funcs.append(List)
+                    elif filt == 'M':
+                        filter_funcs.append(
+                            lambda I,h=filter_masks[ind_mask]: 
+                                convolve(I[:,:],h) )
+                        ind_mask += 1
+                    elif filt == '|Ix|':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,1): 
+                                    np.abs(convolve1d(convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 1),Smooth,axis = 0)))
+                        filter_funcs.append(List)
+                    elif filt == '|Iz|':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,1): 
+                                    np.abs(convolve1d(convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 0),Smooth,axis = 1)))
+                        filter_funcs.append(List)
+                    elif filt == '|gradI|':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,1): 
+                                    np.sqrt( convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 0)**2+convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 1)**2)) 
+                        filter_funcs.append(List)
+                    elif filt == '|Ixx|':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,2): 
+                                    np.abs(convolve1d(convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 1),Smooth,axis = 0)))
+                        filter_funcs.append(List)
+                    elif filt == '|Ixz|':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,1): 
+                                    np.abs(convolve1d(convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 1),h,axis = 0)))
+                        filter_funcs.append(List)
+                    elif filt == '|Izz|':
+                        List = []
+                        Smooth = filter_binomial1d(3,0)
+                        for size in Scale_List:
+                            List.append(
+                                lambda I,h=filter_binomial1d(size,2): 
+                                    np.abs(convolve1d(convolve1d(np.einsum('ijk,k->ij',I[:,:,:],mask),h,axis = 0),Smooth,axis = 1)))
+                        filter_funcs.append(List)
+                    elif filt == '|M|':
+                        filter_funcs.append(
+                            lambda I,h=filter_masks[ind_mask]: 
+                                np.abs(convolve(np.einsum('ijk,k->ij',I[:,:,:],mask),h)) )
+                        ind_mask += 1
+                    elif filt == 'E':
+                        filter_funcs.append([lambda I: self.Entropy_Filter(np.einsum('ijk,k->ij',I[:,:,:],mask))])
+                    else:
+                        print('Unknown filter!')
+                # apply filters to image            
+                f_vec = np.empty((data.shape[0],data.shape[1],len(self.filter_list)), 
+                                    dtype=data.dtype)
+
+                for i in range(0,f_vec.shape[2]):
                     Response = []
                     for filter_scale in filter_funcs[i]:
-                        Response.append(filter_scale(data[:,:,j]))
-                    f_vec[:,:,j,i] = np.squeeze(np.array(Response).max(0))
+                        Response.append(filter_scale(data[:,:,:])/(filter_scale(data[:,:,:]).max()))
+                    f_vec[:,:,i] = np.squeeze(np.array(Response).max(0))
 
         return f_vec
     
@@ -504,7 +634,7 @@ class Features:
         nfeatures = self.f_vec.shape[-1]
         for i in range(nfeatures):
             for j in range(nfeatures):
-                gaussian(cov[:,:,:, i, j], sigma=1, order=0,
+                gaussian(cov[:,:,:, i, j], sigma=0.5, order=0,
                             output=cov[:, :,:,  i, j], mode='reflect')
         
         cov = cov/(np.max(np.max(cov,axis = 3),axis = 3)[:,:,:,None,None])

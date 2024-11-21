@@ -67,6 +67,77 @@ class Features:
         self.Scale_List = Scale_List # Max Response of filter outputs over scales
         self.f_vec = self.covariance_descriptor_3D(data,chanels_num,Scale_List,subtract_mean)
 
+    ' Curvature Features using Weingarten map approximation '
+
+    def Weingarten_Map(self,I,Mask_dim_x = 11,Mask_dim_y = 11):
+        assert Mask_dim_x % 2 != 0 and Mask_dim_y % 2 != 0 
+        N = (Mask_dim_x*Mask_dim_y)
+        Mask = np.ones((Mask_dim_x,Mask_dim_y))/N
+
+        Res_x = 1/I.shape[0]
+        Res_y = 1/I.shape[1]
+
+
+        Im_pred_vec = np.zeros((*I.shape,3))
+        Im_pred_vec_mean = np.zeros((*I.shape,3))
+        Im_pred_vec[:,:,2] = I[:,:]
+        Im_pred_vec[:,:,0:2] = np.moveaxis(np.array(np.indices((Im_pred_vec.shape[0:2])),dtype = np.float32),0,-1)
+        ' Add Resolution to the indices ' 
+        Im_pred_vec[:,:,0:2] = np.einsum("ijk,k->ijk",Im_pred_vec[:,:,0:2],np.array([Res_x,Res_y]))
+        Im_pred_vec_mean = convolve(Im_pred_vec,Mask[:,:,None])
+
+        Cov_Mat = np.zeros((*I.shape,3,3))
+        for i in range(3):
+            for j in range(i+1):
+                Cov_Mat[:,:,i,j] = (N)*convolve(Im_pred_vec[:,:,i]*Im_pred_vec[:,:,j],Mask[:,:])-Im_pred_vec[:,:,i]*Im_pred_vec_mean[:,:,j]-Im_pred_vec[:,:,j]*Im_pred_vec_mean[:,:,i] \
+                    +Im_pred_vec_mean[:,:,i]*Im_pred_vec_mean[:,:,j]
+                Cov_Mat[:,:,j,i] = Cov_Mat[:,:,i,j]
+
+        N_space,T_space,_ = np.split(np.linalg.eigh(Cov_Mat)[1],(1,3),axis = 3)
+
+
+
+        " Weingarten_Map "
+
+        W_Matrix = np.zeros((Cov_Mat.shape[0],Cov_Mat.shape[1],2,2))
+        N_space =  np.squeeze(N_space)
+
+        sigma = 0.1
+        Y_shift = (Mask_dim_x+1)//2
+        X_shift = (Mask_dim_y+1)//2
+        for k in range(Cov_Mat.shape[0]):
+            for j in range(Cov_Mat.shape[1]):
+                #print(k)
+                X_diff = Im_pred_vec[max(k-X_shift,0):k+X_shift,max(j-Y_shift,0):j+Y_shift,:].reshape(-1,3)-Im_pred_vec[k,j,:]
+                Delta_k = T_space[k,j,:,:].T@X_diff.T
+                Normals = N_space[max(k-X_shift,0):k+X_shift,max(j-Y_shift,0):j+Y_shift,:]
+                Scalar_Mat = (N_space[max(k-X_shift,0):k+X_shift,max(j-Y_shift,0):j+Y_shift,:]@N_space[k,j,:])
+                Theta_k = T_space[k,j,:,:].T@(Normals*Scalar_Mat[:,:,None]-N_space[k,j,:]).reshape(-1,3).T
+                Diag_W = np.diag(np.exp(-np.linalg.norm(X_diff,axis=1)/(sigma))/sigma)
+                W_Matrix[k,j,:,:] = -(Theta_k@Diag_W@Delta_k.T)@(np.linalg.inv((Delta_k@Diag_W@Delta_k.T)+0.05*np.eye(2)))
+                W_Matrix[k,j,:,:] = 0.5*(W_Matrix[k,j,:,:]+W_Matrix[k,j,:,:].T)
+        ' Compute Curvatures '
+        nx,ny = W_Matrix.shape[0:2]
+        mean_curvature = np.zeros((nx, ny))
+        gaussian_curvature = np.zeros((nx, ny))
+        principal_curvatures = np.zeros((nx, ny, 2))  # Store kappa1, kappa2
+
+        # Compute eigenvalues and curvatures
+        for i in range(nx):
+            for j in range(ny):
+                W = W_Matrix[i, j]
+                # Compute eigenvalues (principal curvatures)
+                kappa1, kappa2 = np.linalg.eigvalsh(W)  # Use eigvalsh for symmetric matrices
+                principal_curvatures[i, j] = [kappa1, kappa2]
+                # Mean and Gaussian curvatures
+                mean_curvature[i, j] = 0.5*(kappa1 + kappa2)
+                gaussian_curvature[i, j] = kappa1 * kappa2
+            
+        return [mean_curvature,gaussian_curvature,principal_curvatures[0],principal_curvatures[1]]
+        
+
+    ' Computes Entropy Features '
+
     def Entropy_Filter(self,I):
         I_window = np.exp(-(view_as_windows(np.pad(I,((int((self.pad_x-1)/2),\
             int((self.pad_x-1)/2)),(int((self.pad_y-1)/2),int((self.pad_y-1)/2)))),\
@@ -609,6 +680,10 @@ class Features:
                         ind_mask += 1
                     elif filt == 'E':
                         filter_funcs.append([lambda I: self.Entropy_Filter(np.einsum('ijk,k->ij',I[:,:,:],mask))])
+                    elif filt == 'W':
+                        Curvature_List = self.Weingarten_Map(np.einsum('ijk,k->ij',I[:,:,:],mask))
+                        for I in Curvature_List:
+                            filter_funcs.append([lambda I: I])
                     else:
                         print('Unknown filter!')
                 # apply filters to image            

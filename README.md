@@ -51,6 +51,8 @@ The `Features` class constructor initializes the data and sets default parameter
 - `self.weights`: weights applied to compute weighted means and covariances.
 - `self.Scale_List`: contains different scales to apply to the filter derivatives, controlling the scale of the filters being applied to the input data.
 
+
+
 ## 2. Covariance Matrix Computation (`covariance_from_fvec`)
 
 This function computes covariance matrices for the feature vectors, which can be either in 2D or 3D format (controlled by `HDim`). The covariance can be weighted or unweighted:
@@ -82,9 +84,15 @@ There are several filters defined:
 - **Gradient-based filters (|Ix|, |Iy|, |gradI|, etc.)**: Compute gradient magnitudes and other related features.
 - **Custom filters (M)**: Users can apply custom filters via `filter_masks`.
 
+
+
+ ![Cov_Descriptor_Image](/docs/Feature-Illustration.png)
+
 ## 5. Covariance Descriptor Output
 
 Once the filters are applied, the covariance descriptor for each pixel is computed, regularized (to ensure positive definiteness), and smoothed using a Gaussian filter.
+
+ ![Cov_Descriptor_Image](/docs/Covariance-Descriptors-Accuracy.png)
 
 ## 6. Helper Functions
 

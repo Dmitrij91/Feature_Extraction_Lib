@@ -53,6 +53,7 @@ All filters, except for 'x' and 'y', are applied channel-wise. For example, for 
     - A 4D array `res[i, j, k, l]` where each element stores the `(k, l)` entry of the covariance matrix for the pixel at position `(i, j)`.
 """
 
+
 class Features:
     def __init__(self,data,chanels_num,Scale_List = [7],subtract_mean = True,Hdim = False,filter_list = 'E,x,z,H,S,V,I,Ix,Iz,Ixx,Ixz,Izz,|gradI|',pad_x = 11,pad_y = 11,sigma_E = 1):
         self.data = data
@@ -69,8 +70,9 @@ class Features:
 
     ' Curvature Features using Weingarten map approximation '
 
-    def Weingarten_Map(self,I,Mask_dim_x = 11,Mask_dim_y = 11):
+    def Weingarten_Map(self,I,Mask_dim_x = 13,Mask_dim_y = 13):
         assert Mask_dim_x % 2 != 0 and Mask_dim_y % 2 != 0 
+        
         N = (Mask_dim_x*Mask_dim_y)
         Mask = np.ones((Mask_dim_x,Mask_dim_y))/N
 
@@ -85,37 +87,50 @@ class Features:
         ' Add Resolution to the indices ' 
         Im_pred_vec[:,:,0:2] = np.einsum("ijk,k->ijk",Im_pred_vec[:,:,0:2],np.array([Res_x,Res_y]))
         Im_pred_vec_mean = convolve(Im_pred_vec,Mask[:,:,None])
+        Im_pred_vec_mean_w = convolve(Im_pred_vec,Mask[:,:,None])
 
         Cov_Mat = np.zeros((*I.shape,3,3))
-        for i in range(3):
-            for j in range(i+1):
-                Cov_Mat[:,:,i,j] = (N)*convolve(Im_pred_vec[:,:,i]*Im_pred_vec[:,:,j],Mask[:,:])-Im_pred_vec[:,:,i]*Im_pred_vec_mean[:,:,j]-Im_pred_vec[:,:,j]*Im_pred_vec_mean[:,:,i] \
-                    +Im_pred_vec_mean[:,:,i]*Im_pred_vec_mean[:,:,j]
-                Cov_Mat[:,:,j,i] = Cov_Mat[:,:,i,j]
+
+        Cov_Mat =  N*convolve(np.einsum('ijk,ijl->ijkl', Im_pred_vec, Im_pred_vec), Mask[:, :, None,None], mode="nearest")
+        Cov_Mat -= np.einsum('ijk,ijl->ijkl', Im_pred_vec_mean_w, Im_pred_vec_mean)
+        Cov_Mat -= np.einsum('ijl,ijk->ijkl', Im_pred_vec_mean_w, Im_pred_vec_mean)
+        Cov_Mat += np.einsum('ijk,ijl->ijkl', Im_pred_vec_mean, Im_pred_vec_mean)
 
         N_space,T_space,_ = np.split(np.linalg.eigh(Cov_Mat)[1],(1,3),axis = 3)
+        N_space = np.squeeze(N_space)
 
 
 
         " Weingarten_Map "
 
         W_Matrix = np.zeros((Cov_Mat.shape[0],Cov_Mat.shape[1],2,2))
-        N_space =  np.squeeze(N_space)
 
-        sigma = 0.1
+
+        sigma = 3
         Y_shift = (Mask_dim_x+1)//2
         X_shift = (Mask_dim_y+1)//2
-        for k in range(Cov_Mat.shape[0]):
-            for j in range(Cov_Mat.shape[1]):
-                #print(k)
-                X_diff = Im_pred_vec[max(k-X_shift,0):k+X_shift,max(j-Y_shift,0):j+Y_shift,:].reshape(-1,3)-Im_pred_vec[k,j,:]
-                Delta_k = T_space[k,j,:,:].T@X_diff.T
-                Normals = N_space[max(k-X_shift,0):k+X_shift,max(j-Y_shift,0):j+Y_shift,:]
-                Scalar_Mat = (N_space[max(k-X_shift,0):k+X_shift,max(j-Y_shift,0):j+Y_shift,:]@N_space[k,j,:])
-                Theta_k = T_space[k,j,:,:].T@(Normals*Scalar_Mat[:,:,None]-N_space[k,j,:]).reshape(-1,3).T
-                Diag_W = np.diag(np.exp(-np.linalg.norm(X_diff,axis=1)/(sigma))/sigma)
-                W_Matrix[k,j,:,:] = -(Theta_k@Diag_W@Delta_k.T)@(np.linalg.inv((Delta_k@Diag_W@Delta_k.T)+0.05*np.eye(2)))
-                W_Matrix[k,j,:,:] = 0.5*(W_Matrix[k,j,:,:]+W_Matrix[k,j,:,:].T)
+
+        # Pad Input and shift center window around each pixel
+        X_diff = np.pad(Im_pred_vec,((X_shift-1,X_shift-1),(Y_shift-1,Y_shift-1),(0,0)))
+        X_diff = view_as_windows(X_diff,(Mask_dim_x,Mask_dim_y,3),step=(1, 1, 1))
+        X_diff = np.squeeze(X_diff)
+        X_diff -= Im_pred_vec[:,:,None,None,:]
+
+
+        N_space_pad = np.pad(N_space,((X_shift-1,X_shift-1),(Y_shift-1,Y_shift-1),(0,0)))
+        N_space_pad = view_as_windows(N_space_pad,(Mask_dim_x,Mask_dim_y,3),step=(1, 1, 1))
+        N_space_pad =  np.squeeze(N_space_pad)
+        Delta_k = np.einsum('ijlk,ijsml->ijsmk',T_space[:,:,:,:],X_diff)
+        Scalar_Mat = np.einsum('ijsmk,ijk->ijsm',N_space_pad,N_space)
+        N_space_pad = N_space_pad*Scalar_Mat[:,:,:,:,None]-N_space[:,:,None,None,:]
+        Theta_k = np.einsum('ijkl,ijsmk->ijsml',T_space,N_space_pad)
+        Diag_W = np.exp(-np.einsum('ijkls,ijkls->ijkl',X_diff,X_diff)/(sigma**2))/(sigma**2)
+        W_Matrix = -np.einsum('ijsmk,ijsml->ijkl',Theta_k*Diag_W[:,:,:,:,None],Delta_k)
+        Theta_k = np.einsum('ijsmk,ijsml->ijkl',Delta_k*Diag_W[:,:,:,:,None],Delta_k)+0.1*np.eye(2)[None,None,:,:]
+        Theta_k = np.linalg.inv(Theta_k.reshape(-1,2,2)).reshape(*Theta_k.shape)
+        W_Matrix = np.einsum('ijsk,ijkm->ijsm',W_Matrix,Theta_k)
+        W_Matrix = 0.5*(W_Matrix+np.swapaxes(W_Matrix,axis1=2,axis2=3))
+
         ' Compute Curvatures '
         nx,ny = W_Matrix.shape[0:2]
         mean_curvature = np.zeros((nx, ny))
@@ -133,7 +148,7 @@ class Features:
                 mean_curvature[i, j] = 0.5*(kappa1 + kappa2)
                 gaussian_curvature[i, j] = kappa1 * kappa2
             
-        return [mean_curvature,gaussian_curvature,principal_curvatures[0],principal_curvatures[1]]
+        return [mean_curvature,gaussian_curvature,principal_curvatures[:, :, 0],principal_curvatures[:, :, 1]]
         
 
     ' Computes Entropy Features '
@@ -250,6 +265,8 @@ class Features:
 
     def covariance_descriptor_3D(self,data,channel_num,Scale_List,subtract_mean,p_filter = 3, p_cov = 3,eps_pd = 0.0, filter_masks = [],HDim = False):
         
+
+        mask = np.array([0.299,0.587,0.114])/(255.0) # Lift to Gray Values
         # sanity checks:
         assert isinstance(p_filter, int), "p should be an integer!"
         assert p_filter%2 == 1, "p_filter should be odd!"
@@ -561,7 +578,6 @@ class Features:
                 f_vec = np.empty((data.shape[0],data.shape[1],len(self.filter_list)), 
                                     dtype=data.dtype)
             else:
-                mask = np.array([0.299,0.587,0.114])/(255.0)
                 filter_funcs = []
                 ind_mask = 0
                 for filt in self.filter_list:
@@ -681,21 +697,32 @@ class Features:
                     elif filt == 'E':
                         filter_funcs.append([lambda I: self.Entropy_Filter(np.einsum('ijk,k->ij',I[:,:,:],mask))])
                     elif filt == 'W':
-                        Curvature_List = self.Weingarten_Map(np.einsum('ijk,k->ij',I[:,:,:],mask))
-                        for I in Curvature_List:
-                            filter_funcs.append([lambda I: I])
+                        pass
                     else:
                         print('Unknown filter!')
-                # apply filters to image            
-                f_vec = np.empty((data.shape[0],data.shape[1],len(self.filter_list)), 
-                                    dtype=data.dtype)
-
-                for i in range(0,f_vec.shape[2]):
-                    Response = []
-                    for filter_scale in filter_funcs[i]:
-                        Response.append(filter_scale(data[:,:,:])/(filter_scale(data[:,:,:]).max()))
-                    f_vec[:,:,i] = np.squeeze(np.array(Response).max(0))
-
+                # apply filters to image
+                if 'W' in self.filter_list:
+                    f_vec = np.empty((data.shape[0],data.shape[1],len(self.filter_list)+3), 
+                                        dtype=data.dtype)
+                    Curvature_List = self.Weingarten_Map(np.einsum('ijk,k->ij',data[:,:,:],mask))
+                    for i in range(0,f_vec.shape[2]-4):
+                        Response = []
+                        for filter_scale in filter_funcs[i]:
+                            Response.append(filter_scale(data[:,:,:])/(filter_scale(data[:,:,:]).max()))
+                        f_vec[:,:,i] = np.squeeze(np.array(Response).max(0))
+                    f_vec[:,:,i+1] = Curvature_List[0]
+                    f_vec[:,:,i+2] = Curvature_List[1]
+                    f_vec[:,:,i+3] = Curvature_List[2]
+                    f_vec[:,:,i+4] = Curvature_List[3]
+                else:            
+                    f_vec = np.empty((data.shape[0],data.shape[1],len(self.filter_list)), 
+                                        dtype=data.dtype)
+                    for i in range(0,f_vec.shape[2]):
+                        Response = []
+                        for filter_scale in filter_funcs[i]:
+                            Response.append(filter_scale(data[:,:,:])/(filter_scale(data[:,:,:]).max()))
+                        f_vec[:,:,i] = np.squeeze(np.array(Response).max(0))
+                    
         return f_vec
     
     def F_vec_to_Cov(self,p_cov = 5):
@@ -709,7 +736,7 @@ class Features:
         nfeatures = self.f_vec.shape[-1]
         for i in range(nfeatures):
             for j in range(nfeatures):
-                gaussian(cov[:,:,:, i, j], sigma=0.5, order=0,
+                gaussian(cov[:,:,:, i, j], sigma=1, order=0,
                             output=cov[:, :,:,  i, j], mode='reflect')
         
         cov = cov/(np.max(np.max(cov,axis = 3),axis = 3)[:,:,:,None,None])

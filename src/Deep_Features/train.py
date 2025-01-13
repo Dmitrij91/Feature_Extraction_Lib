@@ -14,7 +14,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
 
-parser = argparse.ArgumentParser(description='Train deep network classifier for oct feature extraction.')
+parser = argparse.ArgumentParser(description='Train neuronal network classifier deep feature extraction.')
 parser.add_argument("--resume_hash",
     type=str,
     help="Hash of previous training instance.",
@@ -23,6 +23,11 @@ parser.add_argument("--debug",
     type=int,
     help="Run training in debug mode. No logs are created and limited data is loaded.",
     default=0)
+parser.add_argument('-- Cl_num',
+    type = int , 
+    help = " Number of classes of the underlying dataset  "
+
+)
 args = parser.parse_args()
 
 config_path = '../training_config.json'
@@ -32,11 +37,7 @@ if not os.path.isfile(config_path):
 with open(config_path, "r") as config_file:
     config = json.loads(config_file.read())
 
-# check how many layers to segment
-if "num_layers" in config:
-    c = config["num_layers"]
-else:
-    c = 14
+c = args.Cl_num
 
 # hash to identify this training instance with
 if not len(args.resume_hash) == 0:
@@ -46,43 +47,31 @@ else:
     import time
     training_hash = time.strftime("%Y_%m_%d_%H_%M_%S", time.gmtime())
 
-patch_3d = ('x' in config['window_size'])
+path = os.path.split(os.getcwd())[0]+'/src/Deep_Features'
 
-if patch_3d:
-    window_str = f"{config['window_size']['x']}x{config['window_size']['y']}x{config['window_size']['z']}"
-else:
-    window_str = f"{config['window_size']['y']}x{config['window_size']['z']}"
-model_identifier = f"{config['model']}{config['model_size']}_{training_hash}"
+# Constants
+BASE_PATH = '../../FM_Eikonal/data/weizmann_horse_db'
+TRAIN_FILE = '../src/Deep_Features/training_data.csv'
+TEST_FILE = '../src/Deep_Features/testing_data.csv'
+TOTAL_IMAGES = 327
 
-model_savedir = f"../results/trained_models/{model_identifier}"
-if (not os.path.isdir(model_savedir)) and (not args.debug == 1):
-    os.mkdir(model_savedir)
-model_savepath = os.path.join(model_savedir, f"{model_identifier}.pt")
+# Load Test and Train Data 
 
-summary_logdir = f"./runs/{model_identifier}"
-if (not os.path.isdir(summary_logdir)) and (not args.debug == 1):
-    os.mkdir(summary_logdir)
+D_Train, D_Test = load_or_generate_data(BASE_PATH, TRAIN_FILE, TEST_FILE, TOTAL_IMAGES, resume=False)
 
-distance_matrix_dir = f"../results/distance_matrices/{model_identifier}"
-if (not os.path.isdir(distance_matrix_dir)) and (not args.debug == 1):
-    os.mkdir(distance_matrix_dir)
+window_str = f"{config['window_size']['y']}x{config['window_size']['z']}"
 
-segmentations_dir = f"../results/segmentations/{model_identifier}"
-if (not os.path.isdir(segmentations_dir)) and (not args.debug == 1):
-    os.mkdir(segmentations_dir)
+model_savepath,summary_logdir = Prepare_Training_Instance()
+
 
 # copy config file to places one might refer to
 if not args.debug == 1:
     copyfile(config_path, os.path.join(model_savedir, "training_config.json"))
     copyfile(config_path, os.path.join(summary_logdir, "training_config.json"))
-    copyfile(config_path, os.path.join(distance_matrix_dir, "training_config.json"))
-    copyfile(config_path, os.path.join(segmentations_dir, "training_config.json"))
 
 
-if patch_3d:
-    size_window = (config['window_size']['x'], config['window_size']['y'], config['window_size']['z'])
-else:
-    size_window = (config['window_size']['y'], config['window_size']['z'])
+
+size_window = (config['window_size']['y'], config['window_size']['z'])
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -103,55 +92,53 @@ elif config['model'] == "dense":
 elif config['model'] == "flat_dense":
     from model_dense import flat_dense_predictor
     model = flat_dense_predictor(int(np.prod(size_window)), c, size=config['model_size'], activation=config['activation'], dropout=config['dropout'])
-elif config['model'] == "unet":
-    assert patch_3d, "Only 3D patches supported in U-net architecture"
-    from model_unet import unet_predictor
-    model = unet_predictor(size=config['model_size'])
 else:
     print(f"Unknown model {config['model']}.")
     exit()
 
-# resume training if possible
+
+fully_convolutional = (config['model'] in ['ResNet'])
+model.to(device)
+
+train_dataloader = build_data_loader(size_window, c,path_dir=path,
+    train=True,
+    batch_size=config['batch_size'],
+    workers=config['workers_training'],
+    single_pixel_out=(not fully_convolutional))
+
+test_dataloader = build_data_loader(
+    size_window, c,path_dir=path,
+    train=False,
+    batch_size=config['batch_size'],
+    workers=config['workers_testing'],
+    single_pixel_out=(not fully_convolutional))
+test_iter = iter(test_dataloader)
+
+
 if os.path.isfile(model_savepath):
     model.load_state_dict(torch.load(model_savepath))
 
-fully_convolutional = (config['model'] in ['unet'])
-model.to(device)
-
-if patch_3d:
-    from dataloader import build_data_loader
-else:
-    from dataloader_2d import build_data_loader
-
-train_dataloader = build_data_loader(
-    '../data/oct_converted', size_window, c,
-    train=True,
-    batch_size=config['batch_size'],
-    debug=args.debug,
-    workers=config['workers_training'],
-    single_voxel_out=(not fully_convolutional))
-test_dataloader = build_data_loader('../data/oct_converted',
-    size_window, c,
-    train=False,
-    batch_size=config['batch_size'],
-    debug=args.debug,
-    workers=config['workers_testing'],
-    single_voxel_out=(not fully_convolutional))
-test_iter = iter(test_dataloader)
+# Train the Model  
 
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+if config["optimizer"] == 'SGD':
+    optimizer = optim.SGD(model.parameters(), lr=0.5, momentum=0.9)
+elif config["optimizer"] == 'ADAM':
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
 
-if not args.debug == 1:
-    writer = SummaryWriter(summary_logdir)
+model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+params = sum([np.prod(p.size()) for p in model_parameters])
+print(f"Number of trainable network parameters is {params}")
+
 
 log_interval = int(1e3)
-save_interval = int(1e4)
-num_test_batches = 50
+save_interval = int(1e3)
+num_test_batches = 20
 
 running_loss = 0.0
-for epoch in range(100):  # loop over the dataset multiple times
 
+for epoch in range(100):  # loop over the dataset multiple times
+    running_loss = 0.0
     for i, data in enumerate(train_dataloader, 0):
 
         # get the inputs; data is a list of [inputs, labels]
@@ -172,17 +159,13 @@ for epoch in range(100):  # loop over the dataset multiple times
         if fully_convolutional:
             # remove channel dimension
             outputs = torch.squeeze(outputs, dim=1)
-        loss = criterion(outputs, labels)
+        loss = criterion(outputs, labels[:,0,0])
         loss.backward()
         optimizer.step()
-
         running_loss += loss.item()
         if i % log_interval == log_interval-1:
             print(f"batch {i} training loss {running_loss / log_interval}")
-            if not args.debug == 1:
-                writer.add_scalar('training_loss', running_loss / log_interval, epoch*len(train_dataloader) + i)
             running_loss = 0.0
-
             # run testing
             model.eval()
             test_loss = 0.0
@@ -201,19 +184,15 @@ for epoch in range(100):  # loop over the dataset multiple times
                 test_out = model(test_data)
                 if fully_convolutional:
                     test_out = torch.squeeze(test_out, 1)
-                test_loss += criterion(test_out, test_labels).item()
+                test_loss += criterion(test_out, test_labels[:,0,0]).item()
             print(f"batch {i} testing loss {test_loss / num_test_batches}")
-            if not args.debug == 1:
-                writer.add_scalar('testing_loss', test_loss / num_test_batches, epoch*len(train_dataloader) + i)
             model.train()
-
         if i % save_interval == save_interval-1:
-            if not args.debug == 1:
-                print("Saving model...")
-                torch.save(model.state_dict(), model_savepath)
+            print("Saving model...")
+            torch.save(model.state_dict(), model_savepath)
 
     print("Finished epoch. Saving model...")
-    if not args.debug == 1:
-        torch.save(model.state_dict(), model_savepath)
+    torch.save(model.state_dict(), model_savepath)
 
+    print("Finished epoch. Saving model...")
 print('Finished Training')

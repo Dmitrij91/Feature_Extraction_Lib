@@ -1,14 +1,18 @@
 {
-	"model": "dense",
-	"model_size": 6,
-	"activation": "relu",
-	"window_size": {
-		"x": 8,
-		"y": 8
-	},
-	"dropout": 0.0,
-	"workers_training": 4,
-	"workers_testing": 4,
-	"machine": "barracuda",
-	"batch_size": 32
+    "model": "resnet",
+    "model_size": 18,
+    "activation": "relu",
+    "window_size": {
+        "x": 16,
+        "y": 16
+    },
+    "channels": {
+        "ch": 3
+    },
+    "dropout": 0.3,
+    "workers_training": 4,
+    "workers_testing": 4,
+    "optimizer": "SGD",
+    "machine": "barracuda",
+    "batch_size": 32
 }

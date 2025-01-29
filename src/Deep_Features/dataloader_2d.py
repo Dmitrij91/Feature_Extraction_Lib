@@ -71,15 +71,14 @@ class Image_Patch_Dataset(data.Dataset):
     def __init__(self, data_path, labels_path, size_window, c, single_pixel_out=True):
         """
         """
-        mask = np.array([0.299,0.587,0.114])/(255.0)
-        self.raw_data = np.einsum('ijk,k->ij',np.array(Image.open(data_path).copy()).astype(np.double)[:,:,:],mask)
+        self.raw_data = np.moveaxis(np.array(Image.open(data_path).copy()).astype(np.double),2,0)
         self.size_window = size_window
         try:
-            self.view = view_as_windows(self.raw_data, size_window)
+            self.view = np.squeeze(view_as_windows(self.raw_data, (1,*size_window)))
         except:
             print(f"Failed to stride image {data_path} with shape {self.raw_data.shape} using window of size {size_window}. Skipping.")
             return
-        self.view_spatial_shape = self.view.shape[:2]
+        self.view_spatial_shape = self.view.shape[0:3]
         self.labels = np.array(Image.open(labels_path).copy())
         
         c_dat = int(self.labels.max()) + 1
@@ -92,22 +91,22 @@ class Image_Patch_Dataset(data.Dataset):
         self.single_pixel_out = single_pixel_out
         if single_pixel_out:
             rx, ry = (size_window[0] - 1)//2, (size_window[1] - 1)//2
-            self.labels = self.labels[rx:-rx,ry:-ry]
-            assert self.labels.shape == self.view_spatial_shape
+            self.labels = self.labels[rx+1:-rx,ry+1:-ry]
+            assert self.labels.shape == self.view_spatial_shape[1:3]
         else:
-            self.label_view = view_as_windows(self.labels, size_window)
-
+            self.label_view = view_as_windows(self.labels,size_window)
     def __len__(self):
-        return np.prod(self.view_spatial_shape)
+        return np.prod(self.view_spatial_shape[1:3])
     
     def __getitem__(self, idx):
-        (x,y) = np.unravel_index(idx, self.view_spatial_shape)
-
-        patch = self.view[x,y,:,:].reshape(self.size_window)
+        (x,y) = np.unravel_index(idx, self.view_spatial_shape[1:3])
+        patch = self.view[:,x,y,:,:].reshape((3,*self.size_window))
         if self.single_pixel_out:
-            patch = patch.reshape((self.size_window))
+            patch = self.view[:,x,y,:,:].reshape((3,*self.size_window))
+            #labels = self.label_view[x,y,:,:]
             return torch.FloatTensor(patch), torch.LongTensor(self.labels[x,y].reshape((1,)))
-        labels = self.label_view[x,y,:,:]
+        else:
+            labels = self.label_view[x,y,:,:]
         return torch.FloatTensor(patch), torch.LongTensor(labels.reshape(self.size_window))
 
 def read_Image_list(path):
